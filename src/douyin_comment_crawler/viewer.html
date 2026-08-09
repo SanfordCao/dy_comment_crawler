@@ -1,0 +1,963 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>抖音评论查看器</title>
+  <style>
+    :root {
+      --ink: #17201f;
+      --muted: #687270;
+      --paper: #f4f2ed;
+      --surface: #fffdfa;
+      --line: #ddd9d0;
+      --teal: #0f766e;
+      --teal-dark: #0a5752;
+      --coral: #d94a55;
+      --shadow: 0 18px 50px rgba(31, 44, 42, .09);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+        sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 0%, rgba(15, 118, 110, .11), transparent 30rem),
+        radial-gradient(circle at 92% 8%, rgba(217, 74, 85, .08), transparent 24rem),
+        var(--paper);
+    }
+
+    button, input, select { font: inherit; }
+    button, label[for="directory-input"] { -webkit-tap-highlight-color: transparent; }
+
+    .shell {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 46px 0 72px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 28px;
+      margin-bottom: 24px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 5vw, 60px);
+      line-height: .98;
+      letter-spacing: -.055em;
+    }
+
+    .intro {
+      max-width: 660px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.7;
+    }
+
+    .directory-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 50px;
+      padding: 0 20px;
+      border: 1px solid var(--ink);
+      border-radius: 999px;
+      color: #fff;
+      background: var(--ink);
+      box-shadow: 0 8px 22px rgba(23, 32, 31, .16);
+      cursor: pointer;
+      font-weight: 750;
+      transition: transform .18s ease, background .18s ease;
+    }
+
+    .directory-button:hover { background: var(--teal-dark); transform: translateY(-1px); }
+    .directory-button:focus-visible { outline: 3px solid rgba(15, 118, 110, .26); outline-offset: 3px; }
+    #directory-input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
+
+    .privacy-note {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 42px;
+      margin-bottom: 24px;
+      padding: 10px 14px;
+      border: 1px solid rgba(15, 118, 110, .22);
+      border-radius: 12px;
+      color: var(--teal-dark);
+      background: rgba(255, 255, 255, .54);
+      font-size: 13px;
+    }
+
+    .privacy-dot {
+      width: 8px;
+      height: 8px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 0 0 5px rgba(15, 118, 110, .1);
+    }
+
+    .status {
+      display: none;
+      margin-bottom: 20px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      line-height: 1.5;
+    }
+
+    .status.visible { display: block; }
+    .status.error { border-color: rgba(217, 74, 85, .35); color: #9c2934; background: #fff7f7; }
+
+    .workspace[hidden], .empty[hidden] { display: none; }
+
+    .summary {
+      display: grid;
+      grid-template-columns: 1.4fr repeat(3, minmax(120px, .6fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .summary-card {
+      min-height: 104px;
+      padding: 17px 18px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 253, 250, .9);
+      box-shadow: 0 8px 24px rgba(31, 44, 42, .045);
+    }
+
+    .summary-card.primary {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      color: #f8fffe;
+      border-color: var(--teal-dark);
+      background: var(--teal-dark);
+    }
+
+    .summary-label {
+      color: inherit;
+      opacity: .68;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .11em;
+      text-transform: uppercase;
+    }
+
+    .summary-value {
+      display: block;
+      margin-top: 14px;
+      font-size: 27px;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -.03em;
+    }
+
+    .summary-card.primary .summary-value {
+      overflow: hidden;
+      font-size: 18px;
+      line-height: 1.25;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto auto;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 18px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 253, 250, .82);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 10px;
+      z-index: 10;
+    }
+
+    .search, .sort {
+      height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      color: var(--ink);
+      background: #fff;
+    }
+
+    .search {
+      width: 100%;
+      padding: 0 13px;
+    }
+
+    .sort { padding: 0 32px 0 12px; }
+    .search:focus, .sort:focus { outline: 3px solid rgba(15, 118, 110, .16); border-color: var(--teal); }
+
+    .image-filter {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      white-space: nowrap;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    .image-filter input { accent-color: var(--teal); }
+
+    .result-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 0 2px 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .comments {
+      display: grid;
+      gap: 12px;
+    }
+
+    .comment-card {
+      display: grid;
+      grid-template-columns: 46px minmax(0, 1fr);
+      gap: 13px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: var(--surface);
+      box-shadow: 0 7px 22px rgba(31, 44, 42, .04);
+      content-visibility: auto;
+      contain-intrinsic-size: 220px;
+    }
+
+    .avatar {
+      display: grid;
+      width: 46px;
+      height: 46px;
+      place-items: center;
+      border-radius: 14px;
+      color: #fff;
+      background: hsl(var(--avatar-hue), 39%, 39%);
+      font-size: 17px;
+      font-weight: 800;
+    }
+
+    .comment-main { min-width: 0; }
+
+    .comment-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 8px;
+    }
+
+    .author-wrap { min-width: 0; }
+    .author {
+      overflow: hidden;
+      font-size: 15px;
+      font-weight: 780;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .handle {
+      margin-left: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .meta {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .comment-text {
+      margin: 0;
+      color: #27312f;
+      font-size: 15px;
+      line-height: 1.72;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+
+    .comment-text.empty-text { color: #929a98; font-style: italic; }
+
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+      gap: 9px;
+      margin-top: 13px;
+    }
+
+    .image-button {
+      position: relative;
+      display: block;
+      width: 100%;
+      min-height: 170px;
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #ece9e3;
+      cursor: zoom-in;
+    }
+
+    .image-button img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      min-height: 170px;
+      max-height: 380px;
+      object-fit: cover;
+      transition: transform .24s ease;
+    }
+
+    .image-button:hover img { transform: scale(1.018); }
+
+    .missing-image {
+      display: grid;
+      min-height: 120px;
+      place-items: center;
+      padding: 16px;
+      border: 1px dashed #c8c2b6;
+      border-radius: 12px;
+      color: var(--muted);
+      background: #f4f1eb;
+      text-align: center;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .comment-foot {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 13px;
+    }
+
+    .pill {
+      padding: 5px 8px;
+      border-radius: 999px;
+      color: #596260;
+      background: #f1efea;
+      font-size: 12px;
+    }
+
+    .load-more {
+      display: block;
+      min-width: 180px;
+      min-height: 44px;
+      margin: 22px auto 0;
+      padding: 0 20px;
+      border: 1px solid var(--ink);
+      border-radius: 999px;
+      color: var(--ink);
+      background: transparent;
+      cursor: pointer;
+      font-weight: 750;
+    }
+
+    .load-more:hover { color: #fff; background: var(--ink); }
+    .load-more[hidden] { display: none; }
+
+    .empty {
+      padding: 70px 24px;
+      border: 1px dashed #c8c2b6;
+      border-radius: 20px;
+      color: var(--muted);
+      background: rgba(255, 253, 250, .58);
+      text-align: center;
+    }
+
+    .empty-mark {
+      display: grid;
+      width: 58px;
+      height: 58px;
+      margin: 0 auto 16px;
+      place-items: center;
+      border-radius: 18px;
+      color: #fff;
+      background: var(--teal);
+      font-size: 25px;
+      font-weight: 800;
+      transform: rotate(-4deg);
+    }
+
+    .empty h2 { margin: 0 0 9px; color: var(--ink); font-size: 20px; }
+    .empty p { margin: 0; line-height: 1.7; }
+
+    dialog {
+      width: min(980px, calc(100% - 24px));
+      max-height: calc(100vh - 24px);
+      padding: 0;
+      overflow: hidden;
+      border: 0;
+      border-radius: 18px;
+      background: #101514;
+      box-shadow: 0 28px 90px rgba(0, 0, 0, .45);
+    }
+
+    dialog::backdrop { background: rgba(10, 15, 14, .78); backdrop-filter: blur(4px); }
+
+    .lightbox-inner {
+      position: relative;
+      display: grid;
+      min-height: 260px;
+      max-height: calc(100vh - 24px);
+      place-items: center;
+    }
+
+    .lightbox-image {
+      display: block;
+      max-width: 100%;
+      max-height: calc(100vh - 78px);
+      object-fit: contain;
+    }
+
+    .lightbox-close {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 40px;
+      height: 40px;
+      border: 1px solid rgba(255,255,255,.28);
+      border-radius: 50%;
+      color: #fff;
+      background: rgba(0,0,0,.48);
+      cursor: pointer;
+      font-size: 20px;
+    }
+
+    @media (max-width: 760px) {
+      .shell { width: min(100% - 20px, 1180px); padding-top: 28px; }
+      .hero { grid-template-columns: 1fr; align-items: start; }
+      .directory-button { width: 100%; }
+      .summary { grid-template-columns: 1fr 1fr; }
+      .summary-card.primary { grid-column: 1 / -1; }
+      .controls { grid-template-columns: 1fr; position: static; }
+      .comment-card { grid-template-columns: 38px minmax(0, 1fr); padding: 14px; }
+      .avatar { width: 38px; height: 38px; border-radius: 11px; }
+      .comment-head { display: block; }
+      .meta { display: block; margin-top: 4px; }
+      .gallery { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 460px) {
+      .summary { grid-template-columns: 1fr; }
+      .summary-card.primary { grid-column: auto; }
+      .gallery { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Local archive viewer</p>
+        <h1>抖音评论<br>本地查看器</h1>
+        <p class="intro">
+          选择一次抓取结果目录，页面会读取其中的 comments.json，
+          并把每条评论与对应的本地图片放在一起展示。
+        </p>
+      </div>
+      <label class="directory-button" for="directory-input">选择评论目录</label>
+      <input
+        id="directory-input"
+        type="file"
+        webkitdirectory
+        directory
+        multiple
+        aria-label="选择包含 comments.json 的评论目录"
+      >
+    </header>
+
+    <div class="privacy-note">
+      <span class="privacy-dot" aria-hidden="true"></span>
+      所有文件只在当前浏览器中读取，不会上传到任何服务器。
+    </div>
+
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+
+    <section id="empty-state" class="empty">
+      <div class="empty-mark" aria-hidden="true">评</div>
+      <h2>还没有选择评论目录</h2>
+      <p>请选择包含 comments.json 和评论图片的单次输出目录。</p>
+    </section>
+
+    <section id="workspace" class="workspace" hidden>
+      <div class="summary">
+        <div class="summary-card primary">
+          <span class="summary-label">当前目录</span>
+          <strong id="directory-name" class="summary-value">—</strong>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">评论</span>
+          <strong id="comment-count" class="summary-value">0</strong>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">本地图片</span>
+          <strong id="image-count" class="summary-value">0</strong>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">抓取状态</span>
+          <strong id="crawl-status" class="summary-value">—</strong>
+        </div>
+      </div>
+
+      <div class="controls">
+        <input
+          id="search"
+          class="search"
+          type="search"
+          placeholder="搜索评论、作者或地区"
+          autocomplete="off"
+          aria-label="搜索评论"
+        >
+        <label class="image-filter">
+          <input id="images-only" type="checkbox">
+          仅看带图
+        </label>
+        <select id="sort" class="sort" aria-label="评论排序">
+          <option value="source">原始顺序</option>
+          <option value="likes">点赞最多</option>
+          <option value="newest">时间最新</option>
+        </select>
+      </div>
+
+      <div class="result-line">
+        <span id="result-count">显示 0 条</span>
+        <span id="aweme-id"></span>
+      </div>
+      <div id="comments" class="comments"></div>
+      <button id="load-more" class="load-more" type="button" hidden>显示更多评论</button>
+    </section>
+  </main>
+
+  <dialog id="lightbox" aria-label="评论图片预览">
+    <div class="lightbox-inner">
+      <img id="lightbox-image" class="lightbox-image" alt="评论图片大图">
+      <button id="lightbox-close" class="lightbox-close" type="button" aria-label="关闭图片预览">×</button>
+    </div>
+  </dialog>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const PAGE_SIZE = 48;
+      const state = {
+        payload: null,
+        comments: [],
+        filtered: [],
+        fileMap: new Map(),
+        basenameMap: new Map(),
+        objectUrls: new Map(),
+        visibleLimit: PAGE_SIZE,
+        directoryName: ""
+      };
+
+      const elements = {
+        directoryInput: document.getElementById("directory-input"),
+        status: document.getElementById("status"),
+        empty: document.getElementById("empty-state"),
+        workspace: document.getElementById("workspace"),
+        directoryName: document.getElementById("directory-name"),
+        commentCount: document.getElementById("comment-count"),
+        imageCount: document.getElementById("image-count"),
+        crawlStatus: document.getElementById("crawl-status"),
+        search: document.getElementById("search"),
+        imagesOnly: document.getElementById("images-only"),
+        sort: document.getElementById("sort"),
+        resultCount: document.getElementById("result-count"),
+        awemeId: document.getElementById("aweme-id"),
+        comments: document.getElementById("comments"),
+        loadMore: document.getElementById("load-more"),
+        lightbox: document.getElementById("lightbox"),
+        lightboxImage: document.getElementById("lightbox-image"),
+        lightboxClose: document.getElementById("lightbox-close")
+      };
+
+      const normalizePath = (value) =>
+        String(value || "")
+          .replaceAll("\\", "/")
+          .replace(/^\.?\//, "")
+          .split("/")
+          .filter((part) => part && part !== ".")
+          .join("/");
+
+      const basename = (value) => {
+        const parts = normalizePath(value).split("/");
+        return parts[parts.length - 1] || "";
+      };
+
+      const setStatus = (message, isError = false) => {
+        elements.status.textContent = message;
+        elements.status.className = `status visible${isError ? " error" : ""}`;
+      };
+
+      const clearStatus = () => {
+        elements.status.textContent = "";
+        elements.status.className = "status";
+      };
+
+      const revokeObjectUrls = () => {
+        for (const url of state.objectUrls.values()) {
+          URL.revokeObjectURL(url);
+        }
+        state.objectUrls.clear();
+      };
+
+      const buildFileMaps = (files, jsonFile) => {
+        state.fileMap.clear();
+        state.basenameMap.clear();
+
+        const jsonPath = normalizePath(jsonFile.webkitRelativePath || jsonFile.name);
+        const rootParts = jsonPath.split("/").slice(0, -1);
+        const selectedRoot = rootParts.join("/");
+        const basenameCandidates = new Map();
+
+        for (const file of files) {
+          const fullPath = normalizePath(file.webkitRelativePath || file.name);
+          let relativePath = fullPath;
+          if (selectedRoot && fullPath.startsWith(`${selectedRoot}/`)) {
+            relativePath = fullPath.slice(selectedRoot.length + 1);
+          }
+          state.fileMap.set(normalizePath(relativePath), file);
+
+          const name = basename(file.name);
+          if (!basenameCandidates.has(name)) basenameCandidates.set(name, []);
+          basenameCandidates.get(name).push(file);
+        }
+
+        for (const [name, candidates] of basenameCandidates) {
+          if (candidates.length === 1) state.basenameMap.set(name, candidates[0]);
+        }
+      };
+
+      const resolveImageFile = (path) => {
+        const normalized = normalizePath(path);
+        return state.fileMap.get(normalized) || state.basenameMap.get(basename(normalized));
+      };
+
+      const imageUrlFor = (path) => {
+        const normalized = normalizePath(path);
+        if (state.objectUrls.has(normalized)) return state.objectUrls.get(normalized);
+        const file = resolveImageFile(normalized);
+        if (!file) return null;
+        const url = URL.createObjectURL(file);
+        state.objectUrls.set(normalized, url);
+        return url;
+      };
+
+      const formatNumber = (value) =>
+        new Intl.NumberFormat("zh-CN").format(Number(value) || 0);
+
+      const formatDate = (comment) => {
+        const raw = comment.create_time_iso ||
+          (comment.create_time ? new Date(comment.create_time * 1000).toISOString() : "");
+        if (!raw) return "时间未知";
+        const date = new Date(raw);
+        if (Number.isNaN(date.getTime())) return String(raw);
+        return new Intl.DateTimeFormat("zh-CN", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit"
+        }).format(date);
+      };
+
+      const hasLocalImages = (comment) =>
+        Array.isArray(comment.images) &&
+        comment.images.some((image) => image && image.file && resolveImageFile(image.file));
+
+      const commentSearchText = (comment) => {
+        const author = comment.author || {};
+        return [
+          comment.text,
+          author.nickname,
+          author.unique_id,
+          comment.ip_label
+        ].filter(Boolean).join(" ").toLocaleLowerCase("zh-CN");
+      };
+
+      const hueFor = (value) => {
+        let hash = 0;
+        for (const character of String(value || "评")) {
+          hash = ((hash << 5) - hash + character.codePointAt(0)) | 0;
+        }
+        return Math.abs(hash) % 360;
+      };
+
+      const createPill = (text) => {
+        const span = document.createElement("span");
+        span.className = "pill";
+        span.textContent = text;
+        return span;
+      };
+
+      const openLightbox = (url, alt) => {
+        elements.lightboxImage.src = url;
+        elements.lightboxImage.alt = alt;
+        elements.lightbox.showModal();
+      };
+
+      const createCommentCard = (comment, index) => {
+        const article = document.createElement("article");
+        article.className = "comment-card";
+
+        const author = comment.author || {};
+        const nickname = author.nickname || "未知用户";
+        const avatar = document.createElement("div");
+        avatar.className = "avatar";
+        avatar.style.setProperty("--avatar-hue", String(hueFor(author.uid || nickname)));
+        avatar.textContent = [...nickname][0] || "评";
+        avatar.setAttribute("aria-hidden", "true");
+
+        const main = document.createElement("div");
+        main.className = "comment-main";
+
+        const head = document.createElement("div");
+        head.className = "comment-head";
+        const authorWrap = document.createElement("div");
+        authorWrap.className = "author-wrap";
+        const authorName = document.createElement("span");
+        authorName.className = "author";
+        authorName.textContent = nickname;
+        authorWrap.append(authorName);
+        if (author.unique_id) {
+          const handle = document.createElement("span");
+          handle.className = "handle";
+          handle.textContent = `@${author.unique_id}`;
+          authorWrap.append(handle);
+        }
+
+        const meta = document.createElement("span");
+        meta.className = "meta";
+        meta.textContent = [
+          formatDate(comment),
+          comment.ip_label ? `IP：${comment.ip_label}` : ""
+        ].filter(Boolean).join(" · ");
+        head.append(authorWrap, meta);
+
+        const text = document.createElement("p");
+        text.className = "comment-text";
+        if (comment.text) {
+          text.textContent = String(comment.text);
+        } else {
+          text.textContent = "（无文字评论）";
+          text.classList.add("empty-text");
+        }
+
+        main.append(head, text);
+
+        const images = Array.isArray(comment.images) ? comment.images : [];
+        if (images.length) {
+          const gallery = document.createElement("div");
+          gallery.className = "gallery";
+          images.forEach((image, imageIndex) => {
+            const localPath = image && image.file;
+            const url = localPath ? imageUrlFor(localPath) : null;
+            if (url) {
+              const button = document.createElement("button");
+              button.type = "button";
+              button.className = "image-button";
+              const img = document.createElement("img");
+              img.src = url;
+              img.loading = "lazy";
+              img.alt = `${nickname} 的评论图片 ${imageIndex + 1}`;
+              button.append(img);
+              button.addEventListener("click", () => openLightbox(url, img.alt));
+              gallery.append(button);
+            } else {
+              const missing = document.createElement("div");
+              missing.className = "missing-image";
+              missing.textContent = localPath
+                ? `未在所选目录中找到：${localPath}`
+                : `图片下载失败：${(image && image.error) || "未知原因"}`;
+              gallery.append(missing);
+            }
+          });
+          main.append(gallery);
+        }
+
+        const foot = document.createElement("div");
+        foot.className = "comment-foot";
+        foot.append(
+          createPill(`赞 ${formatNumber(comment.likes)}`),
+          createPill(`回复 ${formatNumber(comment.reply_count)}`),
+          createPill(`#${index + 1}`)
+        );
+        main.append(foot);
+        article.append(avatar, main);
+        return article;
+      };
+
+      const applyFilters = () => {
+        const query = elements.search.value.trim().toLocaleLowerCase("zh-CN");
+        const onlyImages = elements.imagesOnly.checked;
+        let comments = state.comments.filter((comment) => {
+          if (onlyImages && !hasLocalImages(comment)) return false;
+          return !query || commentSearchText(comment).includes(query);
+        });
+
+        if (elements.sort.value === "likes") {
+          comments = [...comments].sort(
+            (left, right) => (Number(right.likes) || 0) - (Number(left.likes) || 0)
+          );
+        } else if (elements.sort.value === "newest") {
+          comments = [...comments].sort(
+            (left, right) =>
+              (Number(right.create_time) || 0) - (Number(left.create_time) || 0)
+          );
+        }
+
+        state.filtered = comments;
+        state.visibleLimit = PAGE_SIZE;
+        renderComments();
+      };
+
+      const renderComments = () => {
+        elements.comments.replaceChildren();
+        const visible = state.filtered.slice(0, state.visibleLimit);
+        const fragment = document.createDocumentFragment();
+        visible.forEach((comment, index) => {
+          fragment.append(createCommentCard(comment, index));
+        });
+        elements.comments.append(fragment);
+
+        elements.resultCount.textContent =
+          `显示 ${formatNumber(visible.length)} / ${formatNumber(state.filtered.length)} 条`;
+        elements.loadMore.hidden = visible.length >= state.filtered.length;
+
+        if (!visible.length) {
+          const message = document.createElement("div");
+          message.className = "empty";
+          const heading = document.createElement("h2");
+          heading.textContent = "没有符合条件的评论";
+          const hint = document.createElement("p");
+          hint.textContent = "可以清空搜索词或关闭“仅看带图”。";
+          message.append(heading, hint);
+          elements.comments.append(message);
+        }
+      };
+
+      const updateSummary = (payload, files) => {
+        const imageCount = state.comments.reduce(
+          (total, comment) =>
+            total + (Array.isArray(comment.images)
+              ? comment.images.filter((image) => image && image.file && resolveImageFile(image.file)).length
+              : 0),
+          0
+        );
+        elements.directoryName.textContent = state.directoryName || "所选目录";
+        elements.commentCount.textContent = formatNumber(state.comments.length);
+        elements.imageCount.textContent = formatNumber(imageCount);
+        elements.crawlStatus.textContent =
+          payload.status === "complete" ? "已完成" :
+          payload.status === "running" ? "进行中" :
+          payload.status || "未知";
+        elements.awemeId.textContent = payload.aweme_id
+          ? `视频 ID：${payload.aweme_id}`
+          : `${formatNumber(files.length)} 个本地文件`;
+      };
+
+      const loadDirectory = async (fileList) => {
+        const files = Array.from(fileList || []);
+        if (!files.length) return;
+        clearStatus();
+        setStatus("正在读取 comments.json…");
+
+        const jsonFiles = files
+          .filter((file) => file.name === "comments.json")
+          .sort(
+            (left, right) =>
+              normalizePath(left.webkitRelativePath).split("/").length -
+              normalizePath(right.webkitRelativePath).split("/").length
+          );
+        if (!jsonFiles.length) {
+          setStatus("所选目录中没有找到 comments.json，请选择单次抓取结果目录。", true);
+          return;
+        }
+
+        const jsonFile = jsonFiles[0];
+        try {
+          const payload = JSON.parse(await jsonFile.text());
+          if (!payload || !Array.isArray(payload.comments)) {
+            throw new Error("comments.json 中缺少 comments 数组");
+          }
+
+          revokeObjectUrls();
+          buildFileMaps(files, jsonFile);
+          state.payload = payload;
+          state.comments = payload.comments;
+          state.directoryName =
+            normalizePath(jsonFile.webkitRelativePath || jsonFile.name).split("/")[0] ||
+            "所选目录";
+          elements.search.value = "";
+          elements.imagesOnly.checked = false;
+          elements.sort.value = "source";
+
+          updateSummary(payload, files);
+          state.filtered = state.comments;
+          state.visibleLimit = PAGE_SIZE;
+          renderComments();
+          elements.empty.hidden = true;
+          elements.workspace.hidden = false;
+          clearStatus();
+        } catch (error) {
+          setStatus(`读取失败：${error instanceof Error ? error.message : String(error)}`, true);
+        }
+      };
+
+      elements.directoryInput.addEventListener("change", (event) => {
+        loadDirectory(event.target.files);
+      });
+      elements.search.addEventListener("input", applyFilters);
+      elements.imagesOnly.addEventListener("change", applyFilters);
+      elements.sort.addEventListener("change", applyFilters);
+      elements.loadMore.addEventListener("click", () => {
+        state.visibleLimit += PAGE_SIZE;
+        renderComments();
+      });
+      elements.lightboxClose.addEventListener("click", () => elements.lightbox.close());
+      elements.lightbox.addEventListener("click", (event) => {
+        if (event.target === elements.lightbox) elements.lightbox.close();
+      });
+      window.addEventListener("beforeunload", revokeObjectUrls);
+    })();
+  </script>
+</body>
+</html>

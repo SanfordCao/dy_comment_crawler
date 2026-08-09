@@ -1,0 +1,2 @@
+[console_scripts]
+douyin-comments = douyin_comment_crawler.cli:main

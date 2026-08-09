@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "douyin-comment-crawler"
+version = "1.0.0"
+description = "A conservative Playwright crawler for first-level Douyin comments and comment images."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "Pillow>=10,<13",
+  "playwright>=1.50,<2",
+]
+
+[project.scripts]
+douyin-comments = "douyin_comment_crawler.cli:main"
+douyin-comment-viewer = "douyin_comment_crawler.viewer:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+douyin_comment_crawler = ["viewer.html"]

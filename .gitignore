@@ -1,0 +1,8 @@
+output/
+.venv/
+.douyin-browser-profile/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.DS_Store
