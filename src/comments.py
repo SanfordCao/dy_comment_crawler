@@ -7,7 +7,8 @@ import re
 
 _TOP_LEVEL_COMMENT_PATH = re.compile(r"/comment/list(?:/|$)", re.IGNORECASE)
 _REPLY_COMMENT_PATH = re.compile(
-    r"/comment/list/(?:reply|sub)(?:/|$)|/reply/comment/list",
+    r"/comment/list/(?:reply|sub)(?:/|$)|/reply/comment/list|"
+    r"/comment/reply/list(?:/|$)",
     re.IGNORECASE,
 )
 
@@ -109,6 +110,18 @@ def is_top_level_comment_response_url(raw_url: str) -> bool:
     )
 
 
+def is_reply_comment_response_url(raw_url: str) -> bool:
+    try:
+        parsed = urlparse(raw_url)
+    except ValueError:
+        return False
+    hostname = (parsed.hostname or "").lower()
+    return bool(
+        (hostname == "douyin.com" or hostname.endswith(".douyin.com"))
+        and _REPLY_COMMENT_PATH.search(parsed.path)
+    )
+
+
 def get_aweme_id_from_url(raw_url: str) -> str:
     try:
         parsed = urlparse(raw_url)
@@ -166,6 +179,10 @@ def extract_pagination(payload: Any) -> dict[str, bool | str | None]:
 def parse_top_level_comment(
     raw_comment: Any,
     fallback_aweme_id: str = "",
+    *,
+    level: int = 1,
+    parent_comment_id: str = "",
+    root_comment_id: str = "",
 ) -> dict[str, Any] | None:
     if not isinstance(raw_comment, dict):
         return None
@@ -204,6 +221,25 @@ def parse_top_level_comment(
         else None
     )
 
+    inferred_parent_id = _string(
+        _first_defined(
+            raw_comment.get("reply_to_reply_id"),
+            raw_comment.get("reply_to_comment_id"),
+            raw_comment.get("parent_comment_id"),
+            parent_comment_id,
+        )
+    )
+    if inferred_parent_id == "0":
+        inferred_parent_id = parent_comment_id
+    inferred_root_id = _string(
+        _first_defined(
+            raw_comment.get("reply_id"),
+            raw_comment.get("root_comment_id"),
+            root_comment_id,
+            inferred_parent_id,
+        )
+    )
+
     return {
         "id": comment_id,
         "aweme_id": _string(
@@ -222,13 +258,17 @@ def parse_top_level_comment(
             "nickname": _string(
                 _first_defined(user.get("nickname"), user.get("name"))
             ),
-            "unique_id": _string(
-                _first_defined(
-                    user.get("unique_id"),
-                    user.get("uniqueId"),
-                    user.get("short_id"),
-                )
+            "unique_id": next(
+                (str(value).strip() for value in
+                 (user.get("unique_id"), user.get("uniqueId"))
+                 if value is not None and str(value).strip() not in {"", "0"}),
+                "",
             ),
+            "unique_id_source": "comment_api" if any(
+                value is not None and str(value).strip() not in {"", "0"}
+                for value in (user.get("unique_id"), user.get("uniqueId"))
+            ) else "",
+            "short_id": _string(user.get("short_id")),
         },
         "create_time": create_time or None,
         "create_time_iso": create_time_iso,
@@ -244,6 +284,11 @@ def parse_top_level_comment(
                 raw_comment.get("reply_count"),
             )
         ),
+        "level": max(1, int(level)),
+        "parent_comment_id": inferred_parent_id or None,
+        "root_comment_id": (
+            inferred_root_id if level > 1 else comment_id
+        ),
         "source_image_urls": extract_comment_image_urls(raw_comment),
         "images": [],
     }
@@ -253,13 +298,34 @@ class CommentStore:
     def __init__(self) -> None:
         self._comments: dict[str, dict[str, Any]] = {}
 
-    def add(self, raw_comment: Any, fallback_aweme_id: str = "") -> bool:
-        parsed = parse_top_level_comment(raw_comment, fallback_aweme_id)
+    def add(
+        self,
+        raw_comment: Any,
+        fallback_aweme_id: str = "",
+        *,
+        level: int = 1,
+        parent_comment_id: str = "",
+        root_comment_id: str = "",
+    ) -> bool:
+        parsed = parse_top_level_comment(
+            raw_comment,
+            fallback_aweme_id,
+            level=level,
+            parent_comment_id=parent_comment_id,
+            root_comment_id=root_comment_id,
+        )
         if parsed is None:
             return False
 
+        return self._add_parsed(parsed)
+
+    def _add_parsed(self, parsed: dict[str, Any]) -> bool:
+
         existing = self._comments.get(parsed["id"])
         if existing is not None:
+            for key, value in parsed["author"].items():
+                if value and not existing["author"].get(key):
+                    existing["author"][key] = value
             if not existing["text"]:
                 existing["text"] = parsed["text"]
             existing["likes"] = max(existing["likes"], parsed["likes"])
@@ -275,9 +341,50 @@ class CommentStore:
         self._comments[parsed["id"]] = parsed
         return True
 
+    def add_tree(
+        self,
+        raw_comment: Any,
+        fallback_aweme_id: str = "",
+        *,
+        level: int = 1,
+        parent_comment_id: str = "",
+        root_comment_id: str = "",
+    ) -> int:
+        if not isinstance(raw_comment, dict):
+            return 0
+        parsed = parse_top_level_comment(
+            raw_comment,
+            fallback_aweme_id,
+            level=level,
+            parent_comment_id=parent_comment_id,
+            root_comment_id=root_comment_id,
+        )
+        if parsed is None:
+            return 0
+        added = int(self._add_parsed(parsed))
+        nested_candidates = (
+            raw_comment.get("reply_comment"),
+            raw_comment.get("reply_comments"),
+            raw_comment.get("replies"),
+        )
+        nested = next(
+            (candidate for candidate in nested_candidates if isinstance(candidate, list)),
+            [],
+        )
+        for child in nested:
+            added += self.add_tree(
+                child,
+                fallback_aweme_id,
+                level=level + 1,
+                parent_comment_id=parsed["id"],
+                root_comment_id=(
+                    parsed["root_comment_id"] if level > 1 else parsed["id"]
+                ),
+            )
+        return added
+
     def __len__(self) -> int:
         return len(self._comments)
 
     def values(self) -> list[dict[str, Any]]:
         return list(self._comments.values())
-

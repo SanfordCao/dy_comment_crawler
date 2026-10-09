@@ -1,0 +1,7 @@
+{
+  "pause_xpath": "(//xg-icon[contains(concat(' ', normalize-space(@class), ' '), ' xgplayer-play ')])[1]",
+  "detail_xpath": "//*[@role='tab' and @data-tabkey='semiTabdetail_tab']",
+  "author_xpath": "//div[contains(@class,'wWJV9hON')]/span[1]",
+  "title_xpath": "//div[contains(@class,'EVDAy35S')]//span[contains(@class,'WPbbXM3l')]",
+  "comment_xpath": "//*[@role='tab' and @data-tabkey='semiTabcomment']"
+}

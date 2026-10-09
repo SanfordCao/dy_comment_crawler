@@ -1,0 +1,1642 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Awaitable, Callable
+from urllib.parse import parse_qs, quote, urlencode, urlparse, urlsplit, urlunsplit
+import asyncio
+import hashlib
+import random
+import re
+
+from playwright.async_api import (
+    BrowserContext,
+    Page,
+    Response,
+    async_playwright,
+)
+
+try:
+    from .comments import (
+        CommentStore,
+        extract_pagination,
+        extract_top_level_comment_array,
+        get_aweme_id_from_url,
+        is_reply_comment_response_url,
+        is_top_level_comment_response_url,
+    )
+    from .output import (
+        create_run_directory,
+        normalize_downloaded_image,
+        safe_path_part,
+        write_result_json,
+    )
+except ImportError:  # Support direct execution from the package directory.
+    from comments import (
+        CommentStore,
+        extract_pagination,
+        extract_top_level_comment_array,
+        get_aweme_id_from_url,
+        is_reply_comment_response_url,
+        is_top_level_comment_response_url,
+    )
+    from output import (
+        create_run_directory,
+        normalize_downloaded_image,
+        safe_path_part,
+        write_result_json,
+    )
+
+_BLOCKING_TEXT = re.compile(
+    r"请完成.{0,8}验证|安全验证|滑块验证|访问过于频繁|操作过于频繁|"
+    r"账号存在风险|扫码登录|验证码登录|密码登录|登录后.{0,12}(?:评论|继续)",
+    re.IGNORECASE,
+)
+
+
+@dataclass(slots=True)
+class CrawlerConfig:
+    url: str
+    output_root: Path
+    profile_dir: Path
+    cdp_url: str | None = None
+    browser_context: BrowserContext | None = None
+    require_initial_login: bool = False
+    scroll_direction: str = "down"
+    comment_scope: str = "top_level"
+    fetch_mode: str = "network_first"
+    fetch_douyin_id: bool = False
+    idle_rounds: int = 8
+    max_comments: int = 0
+    max_minutes: int = 30
+    min_delay_ms: int = 800
+    max_delay_ms: int = 1_400
+    scroll_pixels: int = 700
+    challenge_wait_minutes: int = 30
+    detail_xpath: str = ""
+    pause_xpath: str = ""
+    author_xpath: str = ""
+    title_xpath: str = ""
+    comment_xpath: str = ""
+    non_interactive: bool = False
+    close_page: bool = True
+    action_timeout_ms: int = 10_000
+    navigation_timeout_ms: int = 45_000
+    connection_timeout_ms: int = 60_000
+    max_image_bytes: int = 25 * 1024 * 1024
+    manual_continue: Callable[[str, int], Awaitable[None]] | None = None
+    stop_requested: Callable[[], bool] | None = None
+    run_directory_ready: Callable[[Path], None] | None = None
+
+
+@dataclass(slots=True)
+class ResponseState:
+    response_count: int = 0
+    top_level_response_count: int = 0
+    reply_response_count: int = 0
+    top_level_request_url: str | None = None
+    has_more: bool | None = None
+    cursor: str | None = None
+    last_response_at: float = 0.0
+    last_added: int = 0
+    warnings: set[str] = field(default_factory=set)
+
+
+async def _randomized_pause(config: CrawlerConfig, scale: float = 1.0) -> None:
+    minimum = max(100, round(config.min_delay_ms * scale))
+    maximum = max(minimum, round(config.max_delay_ms * scale))
+    await asyncio.sleep(random.randint(minimum, maximum) / 1_000)
+
+
+def _initial_result(
+    config: CrawlerConfig,
+    run_directory: Path,
+    aweme_id: str,
+) -> dict[str, Any]:
+    from datetime import datetime, timezone
+
+    return {
+        "schema_version": 2,
+        "status": "running",
+        "source_url": config.url,
+        "aweme_id": aweme_id or None,
+        "video_publisher_nickname": "",
+        "video_title": "",
+        "started_at": datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "finished_at": None,
+        "run_directory": str(run_directory),
+        "settings": {
+            "browser_mode": "cdp" if config.cdp_url else "persistent-profile",
+            "scroll_direction": config.scroll_direction,
+            "comment_scope": config.comment_scope,
+            "fetch_mode": config.fetch_mode,
+            "fetch_douyin_id": config.fetch_douyin_id,
+            "idle_rounds": config.idle_rounds,
+            "max_comments": config.max_comments or None,
+            "max_minutes": config.max_minutes,
+            "delay_ms": [config.min_delay_ms, config.max_delay_ms],
+            "challenge_wait_minutes": config.challenge_wait_minutes,
+            "detail_xpath": config.detail_xpath,
+            "pause_xpath": config.pause_xpath,
+            "author_xpath": config.author_xpath,
+            "title_xpath": config.title_xpath,
+            "comment_xpath": config.comment_xpath,
+        },
+        "summary": {
+            "comment_count": 0,
+            "image_count": 0,
+            "failed_image_count": 0,
+            "comment_response_count": 0,
+            "top_level_response_count": 0,
+            "top_level_comment_count": 0,
+            "reply_comment_count": 0,
+            "reply_response_count": 0,
+            "stop_reason": None,
+        },
+        "warnings": [],
+        "comments": [],
+        "error": None,
+    }
+
+
+def _checkpoint(
+    run_directory: Path,
+    result: dict[str, Any],
+    store: CommentStore,
+    response_state: ResponseState,
+) -> None:
+    result["comments"] = store.values()
+    result["summary"]["comment_count"] = len(store)
+    result["summary"]["comment_response_count"] = response_state.response_count
+    values = store.values()
+    result["summary"]["top_level_comment_count"] = sum(
+        1 for comment in values if comment.get("level", 1) == 1
+    )
+    result["summary"]["reply_comment_count"] = sum(
+        1 for comment in values if comment.get("level", 1) > 1
+    )
+    result["summary"]["reply_response_count"] = response_state.reply_response_count
+    result["summary"]["top_level_response_count"] = (
+        response_state.top_level_response_count
+    )
+    write_result_json(run_directory, result)
+
+
+class CommentResponseCollector:
+    def __init__(
+        self,
+        page: Page,
+        store: CommentStore,
+        state: ResponseState,
+        aweme_id: str,
+        include_all_levels: bool = False,
+    ) -> None:
+        self.page = page
+        self.store = store
+        self.state = state
+        self.aweme_id = aweme_id
+        self.include_all_levels = include_all_levels
+        self.pending: set[asyncio.Task[None]] = set()
+        self._listener = self._schedule
+
+    def attach(self) -> None:
+        self.page.on("response", self._listener)
+
+    def detach(self) -> None:
+        self.page.remove_listener("response", self._listener)
+
+    def _schedule(self, response: Response) -> None:
+        response_url = response.url
+        is_top_level = is_top_level_comment_response_url(response_url)
+        is_reply = is_reply_comment_response_url(response_url)
+        if not is_top_level and not (self.include_all_levels and is_reply):
+            return
+        response_aweme_id = get_aweme_id_from_url(response_url)
+        if self.aweme_id and response_aweme_id and response_aweme_id != self.aweme_id:
+            return
+
+        task = asyncio.create_task(self._handle(response, is_reply=is_reply))
+        self.pending.add(task)
+        task.add_done_callback(self.pending.discard)
+
+    async def _handle(self, response: Response, *, is_reply: bool) -> None:
+        try:
+            payload = await response.json()
+        except Exception:
+            self.state.warnings.add(f"无法解析评论响应：{response.url}")
+            return
+
+        comments = extract_top_level_comment_array(payload)
+        if is_reply:
+            query = parse_qs(urlparse(response.url).query)
+            parent_id = next(
+                (
+                    query[key][0]
+                    for key in ("comment_id", "comment_id_str", "root_comment_id", "cid")
+                    if query.get(key)
+                ),
+                "",
+            )
+            added = sum(
+                self.store.add_tree(
+                    comment,
+                    self.aweme_id,
+                    level=2,
+                    parent_comment_id=parent_id,
+                    root_comment_id=parent_id,
+                )
+                for comment in comments
+            )
+        elif self.include_all_levels:
+            added = sum(
+                self.store.add_tree(comment, self.aweme_id) for comment in comments
+            )
+        else:
+            added = sum(self.store.add(comment, self.aweme_id) for comment in comments)
+        pagination = extract_pagination(payload)
+        self.state.response_count += 1
+        if is_reply:
+            self.state.reply_response_count += 1
+        else:
+            self.state.top_level_response_count += 1
+            self.state.top_level_request_url = response.url
+            self.state.has_more = pagination["has_more"]
+            self.state.cursor = pagination["cursor"]
+        self.state.last_response_at = asyncio.get_running_loop().time()
+        self.state.last_added = added
+        print(
+            f"[{'回复' if is_reply else '一级评论'}响应] "
+            f"本页 {len(comments)} 条，新增 {added} 条，"
+            f"累计 {len(self.store)} 条"
+            + (
+                ""
+                if self.state.has_more is None
+                else f"，has_more={self.state.has_more}"
+            )
+        )
+
+    async def drain(self) -> None:
+        while self.pending:
+            await asyncio.gather(*tuple(self.pending), return_exceptions=True)
+
+
+async def _expand_reply_threads(page: Page, config: CrawlerConfig) -> int:
+    if config.comment_scope != "all":
+        return 0
+    clicked = 0
+    for attempt in range(40):
+        token = f"codex-expand-{attempt}-{random.randint(100000, 999999)}"
+        try:
+            result = await page.evaluate(
+                """
+                token => {
+                  const normalize = value =>
+                    (value || "").replace(/\\s+/g, "").trim();
+                  const matchesExpandControl = text =>
+                    text.includes("展开") && !text.includes("收起");
+                  const visible = element => {
+                    const rect = element.getBoundingClientRect();
+                    const style = window.getComputedStyle(element);
+                    return rect.width > 0 && rect.height > 0 &&
+                      style.display !== "none" && style.visibility !== "hidden";
+                  };
+
+                  const commentRoots = Array.from(
+                    document.querySelectorAll('[data-e2e="comment-list"]')
+                  ).filter(visible);
+                  let root = commentRoots.find(element => {
+                    const rect = element.getBoundingClientRect();
+                    return rect.right > window.innerWidth * 0.55;
+                  }) || commentRoots[0] || null;
+                  if (!root) {
+                    let probe = document.elementFromPoint(
+                      Math.max(1, window.innerWidth - 150),
+                      window.innerHeight / 2
+                    );
+                    while (probe && probe !== document.body) {
+                      const style = window.getComputedStyle(probe);
+                      if (
+                        ["auto", "scroll", "overlay"].includes(style.overflowY) &&
+                        probe.scrollHeight > probe.clientHeight
+                      ) {
+                        root = probe;
+                        break;
+                      }
+                      probe = probe.parentElement;
+                    }
+                  }
+                  const searchRoot = root || document;
+                  const constrainToRightSide = !root;
+
+                  const elements = searchRoot.querySelectorAll(
+                    'button, [role="button"], a, [data-e2e*="reply"], div, span, p'
+                  );
+                  for (const element of elements) {
+                    const text = normalize(element.innerText || element.textContent);
+                    if (!text || text.length > 40 || !matchesExpandControl(text)) continue;
+                    if (!visible(element)) continue;
+                    const rect = element.getBoundingClientRect();
+                    if (constrainToRightSide && rect.right < window.innerWidth * 0.55) continue;
+                    const hasSameTextChild = Array.from(element.children).some(
+                      child => normalize(child.innerText || child.textContent) === text
+                    );
+                    if (hasSameTextChild) continue;
+                    const target = element.closest('button, [role="button"], a') || element;
+                    if (target.dataset.douyinExpandClickedText === text) continue;
+                    target.dataset.douyinExpandToken = token;
+                    return {found: true, text, tag: target.tagName.toLowerCase()};
+                  }
+                  return {found: false, reason: "reply-control-missing"};
+                }
+                """,
+                token,
+            )
+            if not result or not result.get("found"):
+                if clicked == 0:
+                    print(
+                        "[回复加载] 评论区内暂未找到新的“展开”入口："
+                        f"{(result or {}).get('reason', 'unknown')}"
+                    )
+                break
+            target = page.locator(
+                f'[data-douyin-expand-token="{token}"]'
+            ).first
+            await target.scroll_into_view_if_needed(timeout=4_000)
+            try:
+                await target.click(timeout=4_000)
+            except Exception:
+                await target.evaluate("element => element.click()")
+            clicked += 1
+            try:
+                await target.evaluate(
+                    """
+                    (element, text) => {
+                      element.dataset.douyinExpandClickedText = text;
+                      delete element.dataset.douyinExpandToken;
+                    }
+                    """,
+                    result.get("text", "展开"),
+                )
+            except Exception:
+                # 点击后元素可能立即被 React 替换；这表示点击已经生效。
+                pass
+            print(
+                f"[回复加载] 已点击“{result.get('text', '展开')}”"
+                f"（本轮第 {clicked} 个）"
+            )
+            # 展开回复使用独立的小间隔；后续仍会等待响应并再次扫描，
+            # 因此提速不会跳过新出现的嵌套“展开”入口。
+            await page.wait_for_timeout(random.randint(280, 480))
+        except Exception as error:
+            print(f"[回复加载] 点击展开入口失败：{error}")
+            break
+    return clicked
+
+
+async def _find_blocking_state(page: Page) -> str:
+    try:
+        body_text = await page.locator("body").inner_text(timeout=5_000)
+    except Exception:
+        return ""
+    match = _BLOCKING_TEXT.search(body_text)
+    return match.group(0) if match else ""
+
+
+async def _extract_video_metadata(
+    page: Page,
+    author_xpath: str = "",
+    title_xpath: str = "",
+) -> dict[str, str]:
+    try:
+        metadata = await page.evaluate(
+            """
+            config => {
+              const read = element => {
+                if (!element) return "";
+                return (element.getAttribute("content") || element.innerText ||
+                  element.textContent || "").replace(/\\s+/g, " ").trim();
+              };
+              const firstText = selectors => {
+                for (const selector of selectors) {
+                  const element = document.querySelector(selector);
+                  const value = read(element);
+                  if (value) return value;
+                }
+                return "";
+              };
+              const readXPath = expression => {
+                if (!expression) return "";
+                try {
+                  const node = document.evaluate(expression, document, null,
+                    XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                  if (!node) return "";
+                  if (node.nodeType === Node.ATTRIBUTE_NODE || node.nodeType === Node.TEXT_NODE) {
+                    return String(node.nodeValue || "").replace(/\\s+/g, " ").trim();
+                  }
+                  return (node.getAttribute?.("content") || node.innerText || node.textContent || "")
+                    .replace(/\\s+/g, " ").trim();
+                } catch { return ""; }
+              };
+              let title = readXPath(config.titleXPath) || firstText([
+                '[data-e2e="video-desc"]',
+                '[data-e2e="video-title"]',
+                'meta[property="og:title"]',
+                'meta[name="twitter:title"]',
+                'meta[name="description"]'
+              ]);
+              if (!title) title = document.title || "";
+              title = title.replace(/\\s*[-|_·]\\s*抖音.*$/, "").trim();
+              let publisher = readXPath(config.authorXPath) || firstText([
+                '[data-e2e="video-author-nickname"]',
+                '[data-e2e="video-author-name"]',
+                'a[data-e2e="video-author"]',
+                '[data-e2e="video-author"]',
+                'meta[name="author"]'
+              ]);
+
+              const currentId = new URL(location.href).searchParams.get("modal_id") ||
+                (location.pathname.match(/\\/(?:video|note)\\/(\\d+)/) || [])[1] || "";
+              const candidates = [];
+              const seen = new Set();
+              const visit = (value, depth, context) => {
+                if (!value || typeof value !== "object" || depth > 18 || seen.has(value)) return;
+                seen.add(value);
+                if (!Array.isArray(value)) {
+                  const author = value.author || value.user || value.author_info || {};
+                  const desc = value.desc || value.description || value.video_title || value.title || "";
+                  const nickname = author.nickname || author.nick_name || author.name || "";
+                  if (desc || nickname) {
+                    const id = String(value.aweme_id || value.awemeId || value.item_id || "");
+                    const score = (currentId && id === currentId ? 100 : 0) +
+                      (context ? 25 : 0) + (desc ? 5 : 0) + (nickname ? 5 : 0);
+                    candidates.push({id, desc: String(desc), nickname: String(nickname), score});
+                  }
+                  for (const [key, child] of Object.entries(value)) {
+                    const keyContext = context || /aweme.?detail|video.?detail|item.?detail/i.test(key);
+                    visit(child, depth + 1, keyContext);
+                  }
+                } else {
+                  for (const child of value) visit(child, depth + 1, context);
+                }
+              };
+              const parseScript = raw => {
+                if (!raw || raw.length > 4_000_000) return;
+                const variants = [raw.trim()];
+                try { variants.push(decodeURIComponent(raw.trim())); } catch {}
+                for (let text of variants) {
+                  try { visit(JSON.parse(text), 0, false); continue; } catch {}
+                  const start = text.search(/[\\[{]/);
+                  const end = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
+                  if (start >= 0 && end > start) {
+                    try { visit(JSON.parse(text.slice(start, end + 1)), 0, false); } catch {}
+                  }
+                }
+              };
+              for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+                parseScript(script.textContent || "");
+              }
+              for (const script of document.querySelectorAll("script")) {
+                const id = script.id || "";
+                const raw = script.textContent || "";
+                if (/ld\\+json/i.test(script.type || "") ||
+                    /render_data|router_data|initial|state/i.test(id) ||
+                    /aweme_detail|awemeDetail|RENDER_DATA|aweme_id/.test(raw.slice(0, 200_000))) {
+                  parseScript(raw);
+                }
+              }
+              candidates.sort((a, b) => b.score - a.score);
+              const embedded = candidates[0] || {};
+              if (!title || /^(抖音|精选|首页)$/.test(title)) title = embedded.desc || title;
+              if (!publisher) publisher = embedded.nickname || "";
+              return {video_title: title, video_publisher_nickname: publisher};
+            }
+            """,
+            {"authorXPath": author_xpath, "titleXPath": title_xpath},
+        )
+    except Exception:
+        return {"video_title": "", "video_publisher_nickname": ""}
+    if not isinstance(metadata, dict):
+        return {"video_title": "", "video_publisher_nickname": ""}
+    return {
+        "video_title": str(metadata.get("video_title") or "").strip(),
+        "video_publisher_nickname": str(
+            metadata.get("video_publisher_nickname") or ""
+        ).strip(),
+    }
+
+
+async def _wait_for_manual_challenge(
+    page: Page,
+    config: CrawlerConfig,
+    blocking_state: str,
+) -> None:
+    if not blocking_state:
+        return
+    if config.non_interactive:
+        raise RuntimeError(f"页面出现登录或风控验证：{blocking_state}")
+
+    print(f"\n页面出现“{blocking_state}”。请在 Chrome 中手动完成登录/验证。")
+    if config.manual_continue is not None:
+        await config.manual_continue(
+            blocking_state,
+            config.challenge_wait_minutes,
+        )
+        await page.wait_for_timeout(1_000)
+        if remaining := await _find_blocking_state(page):
+            raise RuntimeError(f"页面仍显示登录或风控验证：{remaining}")
+        return
+
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(input, "完成后按回车继续："),
+            timeout=config.challenge_wait_minutes * 60,
+        )
+    except TimeoutError as error:
+        raise RuntimeError("等待人工完成登录/验证超时") from error
+
+    await page.wait_for_timeout(1_000)
+    if remaining := await _find_blocking_state(page):
+        raise RuntimeError(f"页面仍显示登录或风控验证：{remaining}")
+
+
+async def _try_open_comment_panel(page: Page) -> bool:
+    selectors = (
+        '[data-e2e="feed-comment-icon"]',
+        '[data-e2e="comment-icon"]',
+        'button[aria-label*="评论"]',
+        '[role="button"][aria-label*="评论"]',
+    )
+    for selector in selectors:
+        targets = page.locator(selector)
+        try:
+            # 网络慢时，评论图标可能在页面主结构加载后才渲染出来。
+            await targets.first.wait_for(state="attached", timeout=15_000)
+            count = await targets.count()
+        except Exception as error:
+            print(f"[评论区] 等待图标失败：{selector}（{error}）")
+            continue
+
+        for index in range(count):
+            target = targets.nth(index)
+            try:
+                if not await target.is_visible():
+                    continue
+                await target.scroll_into_view_if_needed(timeout=5_000)
+                try:
+                    await target.click(timeout=5_000)
+                except Exception:
+                    # 部分抖音页面的 SVG 动画层会拦截常规点击；直接触发该图标的
+                    # DOM click，仍由页面自身事件处理器打开评论区。
+                    await target.evaluate("element => element.click()")
+                await page.wait_for_timeout(3_000)
+                print(f"[评论区] 已点击打开图标：{selector}（第 {index + 1} 个）")
+                return True
+            except Exception as error:
+                print(
+                    f"[评论区] 点击图标失败：{selector}"
+                    f"（第 {index + 1} 个，{error}）"
+                )
+    print("[评论区] 未找到可点击的评论图标")
+    return False
+
+
+async def _pause_configured_video(page: Page, config: CrawlerConfig) -> bool:
+    if not config.pause_xpath.strip():
+        print("[视频暂停] 未配置暂停按钮 XPath，跳过自动暂停")
+        return False
+    visible_video_state = """() => {
+      const videos = [...document.querySelectorAll('video')].filter(v => {
+        const rect = v.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && getComputedStyle(v).visibility !== 'hidden';
+      });
+      return videos.length ? videos.every(v => v.paused) : null;
+    }"""
+    try:
+        if await page.evaluate(visible_video_state) is True:
+            print("[视频暂停] 视频已经暂停，不重复点击")
+            return True
+        videos = page.locator("video:visible")
+        if await videos.count():
+            await videos.first.hover(timeout=config.action_timeout_ms)
+        target = page.locator(f"xpath={config.pause_xpath.strip()}").first
+        await target.wait_for(state="visible", timeout=config.action_timeout_ms)
+        # A play/pause toggle must not resume a video that paused while loading.
+        if await page.evaluate(visible_video_state) is True:
+            print("[视频暂停] 视频已经暂停，不重复点击")
+            return True
+        await target.click(timeout=config.action_timeout_ms)
+        state = await page.evaluate(visible_video_state)
+        if state is not None:
+            await page.wait_for_function(visible_video_state, timeout=config.action_timeout_ms)
+            print("[视频暂停] 已通过配置的 XPath 点击并确认暂停")
+        else:
+            print("[视频暂停] 已点击暂停按钮（未找到可验证状态的视频元素）")
+        return True
+    except Exception as error:
+        print(f"[视频暂停] 点击或暂停验证失败：{error}；继续采集")
+        return False
+
+
+async def _click_configured_xpath(
+    page: Page,
+    xpath: str,
+    label: str,
+    expected_tab_key: str,
+) -> bool:
+    if not xpath.strip():
+        print(f"[{label}] 未配置 XPath")
+        return False
+    target = page.locator(f"xpath={xpath.strip()}").first
+    try:
+        await target.wait_for(state="attached", timeout=10_000)
+        if not await target.is_visible():
+            print(f"[{label}] XPath 节点不可见")
+            return False
+        tab_key = await target.evaluate(
+            """element => {
+              const tab = element.closest('[role="tab"]');
+              return tab?.getAttribute('data-tabkey') ||
+                element.getAttribute('data-tabkey') || element.id || '';
+            }"""
+        )
+        if tab_key != expected_tab_key:
+            print(
+                f"[{label}] XPath 未定位到预期选项卡 {expected_tab_key} "
+                f"（实际：{tab_key or '非选项卡节点'}）"
+            )
+            return False
+        await target.scroll_into_view_if_needed(timeout=5_000)
+        await target.click(timeout=5_000)
+        await page.wait_for_function(
+            """key => {
+              const tab = document.querySelector(`[role="tab"][data-tabkey="${key}"]`);
+              return tab && tab.getAttribute("aria-selected") === "true";
+            }""",
+            arg=expected_tab_key,
+            timeout=5_000,
+        )
+        print(f"[{label}] 已通过配置的 XPath 点击并确认选中")
+        return True
+    except Exception as error:
+        print(f"[{label}] XPath 点击或选中验证失败：{error}")
+        return False
+
+
+async def _scroll_comment_panel(
+    page: Page,
+    config: CrawlerConfig,
+    *,
+    jump_to_end: bool = False,
+) -> bool:
+    delta = (
+        -abs(config.scroll_pixels)
+        if config.scroll_direction == "up"
+        else abs(config.scroll_pixels)
+    )
+    viewport = page.viewport_size
+    if not viewport:
+        print("[评论滚动] 无法读取浏览器视口大小，本轮跳过")
+        return False
+
+    probe_x = max(1, viewport["width"] - 150)
+    probe_y = viewport["height"] / 2
+    try:
+        await page.mouse.move(
+            probe_x,
+            probe_y,
+            steps=random.randint(8, 16),
+        )
+        await page.wait_for_timeout(random.randint(220, 480))
+        scroll_result = await page.evaluate(
+            """
+            ({x, y, delta, jumpToEnd}) => {
+              let element = document.elementFromPoint(x, y);
+              let depth = 0;
+              while (
+                element &&
+                element !== document.body &&
+                element !== document.documentElement
+              ) {
+                const style = window.getComputedStyle(element);
+                const overflowY = style.overflowY;
+                const scrollable =
+                  (overflowY === "auto" ||
+                    overflowY === "scroll" ||
+                    overflowY === "overlay") &&
+                  element.scrollHeight > element.clientHeight;
+
+                if (scrollable) {
+                  const before = element.scrollTop;
+                  element.scrollTop = jumpToEnd
+                    ? element.scrollHeight
+                    : element.scrollTop + delta;
+                  element.dispatchEvent(
+                    new WheelEvent("wheel", {
+                      deltaY: delta,
+                      bubbles: true,
+                      cancelable: true,
+                      clientX: x,
+                      clientY: y
+                    })
+                  );
+                  return {
+                    found: true,
+                    before,
+                    after: element.scrollTop,
+                    depth,
+                    tag: element.tagName.toLowerCase(),
+                    className:
+                      typeof element.className === "string"
+                        ? element.className.slice(0, 120)
+                        : "",
+                    overflowY
+                  };
+                }
+                element = element.parentElement;
+                depth += 1;
+              }
+              return {found: false};
+            }
+            """,
+            {
+                "x": probe_x,
+                "y": probe_y,
+                "delta": delta,
+                "jumpToEnd": jump_to_end,
+            },
+        )
+        if not scroll_result or not scroll_result.get("found"):
+            print(
+                "[评论滚动] 右侧探测点未找到带滚动条的评论容器，"
+                "本轮跳过"
+            )
+            return False
+
+        print(
+            "[评论滚动] 已从右侧探测点滚动容器："
+            f"x={probe_x:.0f}, y={probe_y:.0f}, "
+            f"scrollTop={scroll_result['before']}"
+            f"->{scroll_result['after']}, "
+            f"ancestorDepth={scroll_result['depth']}"
+        )
+        await page.wait_for_timeout(random.randint(120, 260))
+        return True
+    except Exception as error:
+        print(f"[评论滚动] 执行失败：{error}")
+        return False
+
+
+async def _reset_comment_panel_to_top(page: Page) -> bool:
+    viewport = page.viewport_size
+    if not viewport:
+        return False
+    result = await page.evaluate(
+        """
+        ({x, y}) => {
+          let element = document.elementFromPoint(x, y);
+          while (element && element !== document.body) {
+            const style = window.getComputedStyle(element);
+            if (
+              ["auto", "scroll", "overlay"].includes(style.overflowY) &&
+              element.scrollHeight > element.clientHeight
+            ) {
+              element.scrollTop = 0;
+              element.dispatchEvent(new Event("scroll", {bubbles: true}));
+              return true;
+            }
+            element = element.parentElement;
+          }
+          return false;
+        }
+        """,
+        {
+            "x": max(1, viewport["width"] - 150),
+            "y": viewport["height"] / 2,
+        },
+    )
+    if result:
+        print("[采集阶段] 一级评论已加载完，评论列表已回到顶部")
+    return bool(result)
+
+
+async def _page_explicitly_has_no_comments(page: Page) -> bool:
+    try:
+        body_text = await page.locator("body").inner_text(timeout=3_000)
+    except Exception:
+        return False
+    return bool(re.search(r"暂无评论|还没有评论|评论区空空如也", body_text))
+
+
+def determine_stop_reason(
+    *,
+    response_count: int,
+    has_more: bool | None,
+    idle_rounds: int,
+    idle_limit: int,
+) -> str | None:
+    if response_count > 0 and has_more is False and idle_rounds >= 2:
+        return "评论接口返回 has_more=false"
+    if idle_rounds >= idle_limit:
+        return "连续多轮滚动无新增评论"
+    return None
+
+
+def _replace_query_cursor(raw_url: str, cursor: str) -> str:
+    """Keep the browser-observed request intact and replace only its cursor."""
+    parts = urlsplit(raw_url)
+    encoded_cursor = urlencode({"cursor": cursor})
+    replaced = False
+    updated: list[str] = []
+    for item in parts.query.split("&") if parts.query else []:
+        if item.partition("=")[0] == "cursor":
+            if not replaced:
+                updated.append(encoded_cursor)
+                replaced = True
+            continue
+        updated.append(item)
+    if not replaced:
+        updated.append(encoded_cursor)
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, "&".join(updated), parts.fragment)
+    )
+
+
+async def _try_collect_top_level_by_network(
+    *,
+    page: Page,
+    config: CrawlerConfig,
+    store: CommentStore,
+    response_state: ResponseState,
+    collector: CommentResponseCollector,
+    run_directory: Path,
+    result: dict[str, Any],
+) -> str | None:
+    """Page through the observed comment/list request; return a stop reason if done."""
+    if config.fetch_mode != "network_first":
+        print("[一级评论接口] 已选择仅页面滚动模式")
+        return None
+
+    loop = asyncio.get_running_loop()
+    wait_deadline = loop.time() + 12
+    while not response_state.top_level_request_url and loop.time() < wait_deadline:
+        if config.stop_requested is not None and config.stop_requested():
+            return "用户从网页停止任务"
+        await page.wait_for_timeout(250)
+        await collector.drain()
+
+    request_url = response_state.top_level_request_url
+    if not request_url or response_state.cursor is None:
+        message = "未取得可复用的 comment/list 请求或游标，已自动改用页面滚动"
+        print(f"[一级评论接口] {message}")
+        response_state.warnings.add(message)
+        return None
+    if not is_top_level_comment_response_url(request_url):
+        message = "捕获的请求不是一级评论接口，已自动改用页面滚动"
+        print(f"[一级评论接口] {message}")
+        response_state.warnings.add(message)
+        return None
+    if response_state.has_more is False:
+        print("[一级评论接口] 首次响应已表明没有下一页")
+        return (
+            "评论接口返回 has_more=false"
+            if config.comment_scope != "all"
+            else None
+        )
+
+    print(
+        "[一级评论接口] 已捕获真实 comment/list 请求，"
+        "开始在当前登录页面内按游标翻页"
+    )
+    attempted_cursors: set[str] = set()
+    direct_pages = 0
+    direct_added = 0
+    last_checkpoint_at = 0.0
+    deadline = (
+        float("inf")
+        if config.comment_scope == "all"
+        else loop.time() + config.max_minutes * 60
+    )
+
+    while response_state.has_more is not False:
+        if loop.time() >= deadline:
+            return "达到 max-minutes 限制"
+        if config.stop_requested is not None and config.stop_requested():
+            return "用户从网页停止任务"
+        if (
+            config.comment_scope != "all"
+            and config.max_comments > 0
+            and len(store) >= config.max_comments
+        ):
+            return "达到 max-comments 限制"
+
+        cursor = response_state.cursor
+        if cursor is None or cursor in attempted_cursors:
+            message = "接口游标缺失或重复，已自动切换页面滚动"
+            print(f"[一级评论接口] {message}")
+            response_state.warnings.add(message)
+            return None
+        attempted_cursors.add(cursor)
+
+        base_url = response_state.top_level_request_url or request_url
+        next_url = _replace_query_cursor(base_url, cursor)
+        before_responses = response_state.top_level_response_count
+        before_count = len(store)
+        before_cursor = cursor
+        try:
+            fetch_result = await asyncio.wait_for(
+                page.evaluate(
+                    """
+                    async url => {
+                      const response = await fetch(url, {
+                        method: "GET",
+                        credentials: "include",
+                        headers: {"accept": "application/json, text/plain, */*"}
+                      });
+                      await response.arrayBuffer();
+                      return {ok: response.ok, status: response.status};
+                    }
+                    """,
+                    next_url,
+                ),
+                timeout=max(20, config.navigation_timeout_ms / 1_000),
+            )
+            await page.wait_for_timeout(120)
+            await collector.drain()
+        except Exception as error:
+            message = f"接口请求失败，已自动切换页面滚动：{error}"
+            print(f"[一级评论接口] {message}")
+            response_state.warnings.add(message)
+            return None
+
+        response_advanced = (
+            response_state.top_level_response_count > before_responses
+        )
+        cursor_advanced = (
+            response_state.has_more is False
+            or (
+                response_state.cursor is not None
+                and response_state.cursor != before_cursor
+            )
+        )
+        if (
+            not isinstance(fetch_result, dict)
+            or not fetch_result.get("ok")
+            or not response_advanced
+            or not cursor_advanced
+        ):
+            status = (
+                fetch_result.get("status")
+                if isinstance(fetch_result, dict)
+                else "unknown"
+            )
+            message = (
+                "接口未正常推进分页"
+                f"（HTTP {status}），已自动切换页面滚动"
+            )
+            print(f"[一级评论接口] {message}")
+            response_state.warnings.add(message)
+            return None
+
+        direct_pages += 1
+        added = len(store) - before_count
+        direct_added += max(0, added)
+        print(
+            f"[一级评论接口分页 {direct_pages}] 新增 {max(0, added)} 条，"
+            f"累计 {len(store)} 条，has_more={response_state.has_more}"
+        )
+        if loop.time() - last_checkpoint_at >= 5:
+            _checkpoint(run_directory, result, store, response_state)
+            last_checkpoint_at = loop.time()
+        if response_state.has_more is not False:
+            await _randomized_pause(config, 0.55)
+
+    print(
+        f"[一级评论接口] 分页完成：主动请求 {direct_pages} 页，"
+        f"新增 {direct_added} 条一级评论"
+    )
+    return (
+        "评论接口返回 has_more=false"
+        if config.comment_scope != "all"
+        else None
+    )
+
+
+async def _collect_by_scrolling(
+    *,
+    page: Page,
+    config: CrawlerConfig,
+    store: CommentStore,
+    response_state: ResponseState,
+    collector: CommentResponseCollector,
+    run_directory: Path,
+    result: dict[str, Any],
+) -> str:
+    loop = asyncio.get_running_loop()
+    deadline = (
+        float("inf")
+        if config.comment_scope == "all"
+        else loop.time() + config.max_minutes * 60
+    )
+    previous_count = len(store)
+    idle_rounds = 0
+    scroll_target_warnings = 0
+    round_number = 0
+    last_checkpoint_at = 0.0
+    reply_phase = config.comment_scope != "all"
+
+    while loop.time() < deadline:
+        round_number += 1
+        if config.stop_requested is not None and config.stop_requested():
+            return "用户从网页停止任务"
+        if (
+            config.comment_scope != "all"
+            and config.max_comments > 0
+            and len(store) >= config.max_comments
+        ):
+            return "达到 max-comments 限制"
+
+        if round_number == 1 or round_number % 8 == 0:
+            await _wait_for_manual_challenge(
+                page,
+                config,
+                await _find_blocking_state(page),
+            )
+
+        if (
+            config.comment_scope == "all"
+            and not reply_phase
+            and response_state.top_level_response_count > 0
+            and response_state.has_more is False
+        ):
+            await collector.drain()
+            await _reset_comment_panel_to_top(page)
+            await _randomized_pause(config)
+            reply_phase = True
+            idle_rounds = 0
+            previous_count = len(store)
+            print(
+                "[采集阶段] 开始从顶部扫描全部一级评论并递归展开回复"
+            )
+
+        expanded_count = 0
+        if config.comment_scope == "all" and reply_phase:
+            expanded_count = await _expand_reply_threads(page, config)
+            await collector.drain()
+
+        # 所有层级模式先把当前 DOM 中能看到的回复入口处理完。只要本轮有
+        # 展开动作就暂不滚动，避免虚拟列表卸载尚未处理的一级评论。
+        found_target = True
+        if expanded_count == 0:
+            found_target = await _scroll_comment_panel(
+                page,
+                config,
+                jump_to_end=(
+                    config.comment_scope == "all" and not reply_phase
+                ),
+            )
+        if not found_target and scroll_target_warnings < 3:
+            scroll_target_warnings += 1
+            response_state.warnings.add(
+                "右侧评论区探测点未找到带滚动条的容器；"
+                "为避免切换视频，本轮未发送滚动事件"
+            )
+
+        await _randomized_pause(config)
+        await collector.drain()
+        if len(store) > previous_count or expanded_count > 0:
+            idle_rounds = 0
+            if len(store) > previous_count:
+                previous_count = len(store)
+                # 大量回复模式下每轮完整重写 JSON 会越来越慢。最多每 5 秒
+                # 保存一次中间检查点；循环结束后还会无条件完整保存。
+                if loop.time() - last_checkpoint_at >= 5:
+                    _checkpoint(run_directory, result, store, response_state)
+                    last_checkpoint_at = loop.time()
+        else:
+            idle_rounds += 1
+
+        idle_limit = (
+            max(config.idle_rounds, 30)
+            if config.comment_scope == "all" and reply_phase
+            else config.idle_rounds
+        )
+        idle_status = (
+            "等待一级评论接口返回 has_more=false"
+            if config.comment_scope == "all" and not reply_phase
+            else f"{idle_rounds}/{idle_limit}"
+        )
+        print(
+            f"[{'回复扫描' if reply_phase and config.comment_scope == 'all' else '一级加载'} "
+            f"{round_number}] 累计 {len(store)} 条，"
+            f"本轮展开 {expanded_count} 个，"
+            f"连续无新增且无展开 {idle_status}"
+        )
+
+        stop_reason = None
+        if config.comment_scope != "all" or reply_phase:
+            stop_reason = determine_stop_reason(
+                response_count=response_state.response_count,
+                has_more=(
+                    None
+                    if config.comment_scope == "all"
+                    else response_state.has_more
+                ),
+                idle_rounds=idle_rounds,
+                idle_limit=idle_limit,
+            )
+        if stop_reason == "连续多轮滚动无新增评论":
+            if (
+                response_state.response_count == 0
+                and await _page_explicitly_has_no_comments(page)
+            ):
+                return "页面明确显示暂无评论"
+        if stop_reason:
+            return stop_reason
+
+    return "达到 max-minutes 限制"
+
+
+def _write_exclusive(path: Path, content: bytes) -> None:
+    with path.open("xb") as file:
+        file.write(content)
+
+
+async def _download_comment_images(
+    context: BrowserContext,
+    comments: list[dict[str, Any]],
+    run_directory: Path,
+    config: CrawlerConfig,
+) -> tuple[int, int]:
+    semaphore = asyncio.Semaphore(3)
+    images_directory = run_directory / "images"
+    images_directory.mkdir(parents=True, exist_ok=True)
+
+    async def download_for_comment(comment: dict[str, Any]) -> tuple[int, int]:
+        downloaded = 0
+        failed = 0
+        source_urls = list(dict.fromkeys(comment["source_image_urls"]))
+        for index, source_url in enumerate(source_urls, start=1):
+            try:
+                async with semaphore:
+                    await _randomized_pause(config, 0.18)
+                    response = await context.request.get(
+                        source_url,
+                        fail_on_status_code=False,
+                        headers={"Referer": "https://www.douyin.com/"},
+                        timeout=30_000,
+                    )
+                    if not response.ok:
+                        raise RuntimeError(f"HTTP {response.status}")
+                    body = await response.body()
+                    if len(body) > config.max_image_bytes:
+                        raise RuntimeError(
+                            "图片超过大小限制 "
+                            f"{config.max_image_bytes} bytes"
+                        )
+
+                    source_content_type = response.headers.get("content-type")
+                    body, extension, content_type, converted_from = (
+                        normalize_downloaded_image(
+                            body,
+                            source_content_type,
+                            source_url,
+                        )
+                    )
+                    if len(body) > config.max_image_bytes:
+                        raise RuntimeError(
+                            "转换后的图片超过大小限制 "
+                            f"{config.max_image_bytes} bytes"
+                        )
+                    fallback = hashlib.sha256(
+                        comment["id"].encode()
+                    ).hexdigest()[:12]
+                    id_part = safe_path_part(comment["id"], fallback)
+                    filename = f"comment-{id_part}-{index:02d}{extension}"
+                    await asyncio.to_thread(
+                        _write_exclusive,
+                        images_directory / filename,
+                        body,
+                    )
+                comment["images"].append(
+                    {
+                        "source_url": source_url,
+                        "file": f"images/{filename}",
+                        "content_type": content_type,
+                        "source_content_type": source_content_type,
+                        "converted_from": converted_from,
+                        "bytes": len(body),
+                    }
+                )
+                downloaded += 1
+            except Exception as error:
+                comment["images"].append(
+                    {
+                        "source_url": source_url,
+                        "file": None,
+                        "error": str(error),
+                    }
+                )
+                failed += 1
+        return downloaded, failed
+
+    results = await asyncio.gather(
+        *(download_for_comment(comment) for comment in comments)
+    )
+    return (
+        sum(downloaded for downloaded, _ in results),
+        sum(failed for _, failed in results),
+    )
+
+
+def _is_target_profile_response(response: Response, sec_uid: str) -> bool:
+    """Reject unrelated responses before reading their bodies."""
+    parsed = urlparse(response.url)
+    return (
+        parsed.hostname == "www.douyin.com"
+        and parsed.path.rstrip("/") == "/aweme/v1/web/user/profile/other"
+        and parse_qs(parsed.query).get("sec_user_id") == [sec_uid]
+    )
+
+
+async def _read_profile_short_id(
+    page: Page, sec_uid: str, config: CrawlerConfig,
+) -> str:
+    future = asyncio.get_running_loop().create_future()
+    pending: set[asyncio.Task] = set()
+
+    async def read_response(response: Response) -> None:
+        try:
+            payload = await response.json()
+            if not isinstance(payload, dict):
+                return
+            user = payload.get("user")
+            if not isinstance(user, dict) or user.get("sec_uid") != sec_uid:
+                return
+            if payload.get("status_code") not in (None, 0):
+                return
+            value = str(user.get("short_id") or "").strip()
+            if not future.done():
+                future.set_result(value if value != "0" else "")
+        except Exception:
+            # A malformed response may be followed by a valid one.
+            pass
+
+    def on_response(response: Response) -> None:
+        if _is_target_profile_response(response, sec_uid):
+            task = asyncio.create_task(read_response(response))
+            pending.add(task)
+            task.add_done_callback(pending.discard)
+
+    page.on("response", on_response)
+    try:
+        profile_url = f"https://www.douyin.com/user/{quote(sec_uid, safe='')}"
+        try:
+            await page.goto(profile_url, wait_until="domcontentloaded",
+                            timeout=config.navigation_timeout_ms)
+        except Exception:
+            if not future.done():
+                raise
+        if not future.done():
+            blocker = await _find_blocking_state(page)
+            if blocker:
+                print("[抖音号] 用户主页需要登录或验证，等待人工处理")
+                await page.bring_to_front()
+                await _wait_for_manual_challenge(page, config, blocker)
+                await page.goto(profile_url, wait_until="domcontentloaded",
+                                timeout=config.navigation_timeout_ms)
+        return await asyncio.wait_for(future, config.navigation_timeout_ms / 1000)
+    finally:
+        page.remove_listener("response", on_response)
+        for task in tuple(pending):
+            task.cancel()
+        if pending:
+            await asyncio.gather(*tuple(pending), return_exceptions=True)
+
+
+async def _supplement_douyin_ids(
+    context: BrowserContext, config: CrawlerConfig, store: CommentStore,
+    run_directory: Path, result: dict[str, Any], state: ResponseState,
+) -> None:
+    if not config.fetch_douyin_id:
+        return
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for comment in store.values():
+        author = comment["author"]
+        key = author.get("sec_uid") or author.get("uid") or comment["id"]
+        groups.setdefault(key, []).append(author)
+    print(f"[抖音号] 开始处理 {len(groups)} 位去重用户；主页补充会增加耗时")
+    profile_page = None
+    success = failed = 0
+    last_checkpoint = asyncio.get_running_loop().time()
+    last_profile_at = 0.0
+    try:
+        for authors in groups.values():
+            if config.stop_requested and config.stop_requested():
+                print("[抖音号] 已停止补充，保留已经获取的抖音号")
+                break
+            first = authors[0]
+            name = first.get("nickname") or "匿名用户"
+            sec_uid = first.get("sec_uid") or ""
+            existing = next((a for a in authors if a.get("unique_id")), None)
+            if existing:
+                value, source = existing["unique_id"], "comment_api"
+            elif not sec_uid:
+                failed += 1
+                print(f"[抖音号][未获取] {name}：缺少 sec_uid，无法访问主页")
+                continue
+            else:
+                delay = random.randint(max(800, config.min_delay_ms),
+                                       max(1400, config.max_delay_ms, config.min_delay_ms)) / 1000
+                while asyncio.get_running_loop().time() < last_profile_at + delay:
+                    if config.stop_requested and config.stop_requested():
+                        break
+                    await asyncio.sleep(0.2)
+                if config.stop_requested and config.stop_requested():
+                    print("[抖音号] 已停止补充，保留已经获取的抖音号")
+                    break
+                if profile_page is None:
+                    profile_page = await context.new_page()
+                    profile_page.set_default_timeout(config.action_timeout_ms)
+                last_profile_at = asyncio.get_running_loop().time()
+                print(f"[抖音号][主页查询] {name}；sec_uid={sec_uid}")
+                task = asyncio.create_task(_read_profile_short_id(profile_page, sec_uid, config))
+                stopped = False
+                try:
+                    while not task.done():
+                        await asyncio.wait({task}, timeout=0.2)
+                        if config.stop_requested and config.stop_requested():
+                            stopped = True
+                            task.cancel()
+                            break
+                    if stopped:
+                        print("[抖音号] 已停止补充，保留已经获取的抖音号")
+                        break
+                    value = task.result()
+                except Exception as error:
+                    failed += 1
+                    warning = f"抖音号主页补充失败：{name}（{sec_uid}）；{type(error).__name__}"
+                    state.warnings.add(warning)
+                    print(f"[抖音号][未获取] {warning}")
+                    continue
+                finally:
+                    if not task.done():
+                        task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                if not value:
+                    failed += 1
+                    print(f"[抖音号][未获取] {name}：主页接口 short_id 为空或为 0")
+                    continue
+                source = "profile_api"
+            for author in authors:
+                if not author.get("unique_id"):
+                    author["unique_id"] = value
+                    author["unique_id_source"] = source
+                    if source == "profile_api":
+                        author["short_id"] = value
+            success += 1
+            label = "评论接口 unique_id" if source == "comment_api" else "主页接口 short_id"
+            print(f"[抖音号][{label}] {name}：{value}；关联 {len(authors)} 条评论")
+            now = asyncio.get_running_loop().time()
+            if success % 20 == 0 or now - last_checkpoint >= 3:
+                _checkpoint(run_directory, result, store, state)
+                last_checkpoint = now
+    finally:
+        if profile_page is not None:
+            try:
+                await profile_page.close()
+            except Exception:
+                pass
+        _checkpoint(run_directory, result, store, state)
+    print(f"[抖音号] 处理结束：成功 {success} 位，未获取 {failed} 位")
+
+
+async def crawl_douyin_comments(
+    config: CrawlerConfig,
+) -> tuple[Path, dict[str, Any]]:
+    from datetime import datetime, timezone
+
+    aweme_id = get_aweme_id_from_url(config.url)
+    run_directory = create_run_directory(config.output_root, aweme_id)
+    result = _initial_result(config, run_directory, aweme_id)
+    store = CommentStore()
+    response_state = ResponseState()
+    write_result_json(run_directory, result)
+    if config.run_directory_ready is not None:
+        config.run_directory_ready(run_directory)
+
+    page: Page | None = None
+    collector: CommentResponseCollector | None = None
+    playwright_instance = None
+    owned_context = False
+    context: BrowserContext | None = None
+    try:
+        if config.browser_context is None:
+            playwright_instance = await async_playwright().start()
+        if config.browser_context is not None:
+            context = config.browser_context
+            page = await context.new_page()
+        elif config.cdp_url:
+            print(f"连接现有 Chrome：{config.cdp_url}")
+            browser = await playwright_instance.chromium.connect_over_cdp(
+                config.cdp_url,
+                timeout=config.connection_timeout_ms,
+            )
+            if not browser.contexts:
+                raise RuntimeError("Chrome 中没有可用的浏览器上下文")
+            context = browser.contexts[0]
+            page = await context.new_page()
+        else:
+            profile_is_new = not config.profile_dir.exists() or not any(
+                config.profile_dir.iterdir()
+            )
+            config.profile_dir.mkdir(parents=True, exist_ok=True)
+            print(f"启动专用 Chrome 配置：{config.profile_dir}")
+            context = await playwright_instance.chromium.launch_persistent_context(
+                user_data_dir=str(config.profile_dir),
+                channel="chrome",
+                headless=False,
+            )
+            owned_context = True
+            if context.pages and context.pages[0].url == "about:blank":
+                page = context.pages[0]
+            else:
+                page = await context.new_page()
+
+        page.set_default_timeout(config.action_timeout_ms)
+        collector = CommentResponseCollector(
+            page,
+            store,
+            response_state,
+            aweme_id,
+            include_all_levels=config.comment_scope == "all",
+        )
+        collector.attach()
+
+        print(
+            "[采集模式] "
+            + (
+                "所有层级评论：先完整加载一级评论，再从顶部展开全部回复"
+                if config.comment_scope == "all"
+                else "仅一级评论"
+            )
+        )
+        if config.comment_scope == "all":
+            print(
+                "[完整性保护] 所有层级模式不会因评论数或运行分钟上限自动截断；"
+                "确认无新增和无展开入口后才结束"
+            )
+        print(f"打开页面：{config.url}")
+        await page.goto(
+            config.url,
+            wait_until="domcontentloaded",
+            timeout=config.navigation_timeout_ms,
+        )
+        await page.bring_to_front()
+        await _randomized_pause(config, 1.2)
+        initial_state = await _find_blocking_state(page)
+        if (config.require_initial_login or (owned_context and profile_is_new)) and not initial_state:
+            initial_state = "首次使用专用浏览器配置，请先登录抖音"
+        await _wait_for_manual_challenge(
+            page,
+            config,
+            initial_state,
+        )
+        paused = await _pause_configured_video(page, config)
+        if config.pause_xpath.strip() and not paused:
+            response_state.warnings.add("自动暂停视频失败，请检查暂停按钮 XPath")
+        await collector.drain()
+
+        # 执行顺序：评论图标 -> 详情 XPath -> 读取视频信息 -> 评论 XPath。
+        await _try_open_comment_panel(page)
+        if not await _click_configured_xpath(
+            page, config.detail_xpath, "详情", "semiTabdetail_tab"
+        ):
+            raise RuntimeError(
+                "选项卡切换失败：详情；请检查高级配置中的详情按钮 XPath"
+            )
+        await _randomized_pause(config)
+        video_metadata = await _extract_video_metadata(
+            page, config.author_xpath, config.title_xpath
+        )
+        result.update(video_metadata)
+        print(
+            "[视频信息] 发布者："
+            f"{video_metadata['video_publisher_nickname'] or '未获取到'}；"
+            f"标题：{video_metadata['video_title'] or '未获取到'}"
+        )
+        if not await _click_configured_xpath(
+            page, config.comment_xpath, "评论", "semiTabcomment"
+        ):
+            raise RuntimeError(
+                "选项卡切换失败：评论；请检查高级配置中的评论按钮 XPath"
+            )
+        await _randomized_pause(config)
+        await collector.drain()
+        _checkpoint(run_directory, result, store, response_state)
+
+        network_stop_reason = await _try_collect_top_level_by_network(
+            page=page,
+            config=config,
+            store=store,
+            response_state=response_state,
+            collector=collector,
+            run_directory=run_directory,
+            result=result,
+        )
+        if network_stop_reason is not None:
+            result["summary"]["stop_reason"] = network_stop_reason
+        else:
+            result["summary"]["stop_reason"] = await _collect_by_scrolling(
+                page=page,
+                config=config,
+                store=store,
+                response_state=response_state,
+                collector=collector,
+                run_directory=run_directory,
+                result=result,
+            )
+        await collector.drain()
+        _checkpoint(run_directory, result, store, response_state)
+
+        if (
+            response_state.response_count == 0
+            and result["summary"]["stop_reason"] != "页面明确显示暂无评论"
+        ):
+            raise RuntimeError(
+                "未捕获到一级评论列表响应；请确认评论区已打开、页面可正常访问，"
+                "或尝试切换 --scroll-direction"
+            )
+
+        # Freeze comments before profile navigation; do not collect unrelated data.
+        collector.detach()
+        await collector.drain()
+        await _supplement_douyin_ids(
+            context, config, store, run_directory, result, response_state,
+        )
+
+        image_total = sum(
+            len(comment["source_image_urls"]) for comment in store.values()
+        )
+        print(f"开始顺序下载 {image_total} 张评论图片")
+        image_count, failed_image_count = await _download_comment_images(
+            context,
+            store.values(),
+            run_directory,
+            config,
+        )
+
+        result["status"] = "complete"
+        result["finished_at"] = (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+        result["comments"] = store.values()
+        result["summary"]["comment_count"] = len(store)
+        result["summary"]["image_count"] = image_count
+        result["summary"]["failed_image_count"] = failed_image_count
+        result["summary"]["comment_response_count"] = response_state.response_count
+        result["summary"]["top_level_comment_count"] = sum(
+            1 for comment in store.values() if comment.get("level", 1) == 1
+        )
+        result["summary"]["reply_comment_count"] = sum(
+            1 for comment in store.values() if comment.get("level", 1) > 1
+        )
+        result["summary"]["reply_response_count"] = response_state.reply_response_count
+        result["summary"]["top_level_response_count"] = (
+            response_state.top_level_response_count
+        )
+        result["warnings"] = sorted(response_state.warnings)
+        write_result_json(run_directory, result)
+        return run_directory, result
+    except Exception as error:
+        result["status"] = "failed"
+        result["finished_at"] = (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+        result["error"] = {
+            "name": type(error).__name__,
+            "message": str(error),
+        }
+        result["warnings"] = sorted(response_state.warnings)
+        _checkpoint(run_directory, result, store, response_state)
+        setattr(error, "run_directory", run_directory)
+        raise
+    finally:
+        if collector is not None:
+            collector.detach()
+        if owned_context and context is not None:
+            try:
+                await context.close()
+            except Exception:
+                pass
+        elif page is not None and config.close_page:
+            try:
+                await page.close()
+            except Exception:
+                pass
+        if playwright_instance is not None:
+            try:
+                await playwright_instance.stop()
+            except Exception:
+                pass

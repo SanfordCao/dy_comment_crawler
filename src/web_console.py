@@ -1,0 +1,844 @@
+from __future__ import annotations
+
+from argparse import ArgumentParser
+from contextlib import redirect_stdout
+from contextvars import ContextVar
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import TextIOBase
+from pathlib import Path
+from threading import Event, Lock, Thread
+from typing import Any, Callable
+from playwright.async_api import async_playwright
+from urllib.parse import quote, unquote, urlparse, parse_qs
+from uuid import uuid4
+import asyncio
+import json
+import mimetypes
+import re
+import shutil
+import sys
+import traceback
+import webbrowser
+
+try:
+    from .crawler import CrawlerConfig, crawl_douyin_comments
+    from .export_comments_excel import export_comments_to_excel
+    from .output import read_result_json
+except ImportError:
+    from crawler import CrawlerConfig, crawl_douyin_comments
+    from export_comments_excel import export_comments_to_excel
+    from output import read_result_json
+
+
+def load_console_html() -> bytes:
+    return Path(__file__).with_name("web_console.html").read_bytes()
+
+
+def excel_download_filename(result: dict[str, Any]) -> str:
+    author = result.get("video_publisher_nickname") or "作者未知"
+    title = result.get("video_title") or "标题未知"
+    # Keep the visible task name, replacing characters invalid on Windows.
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", f"{author}-{title}")
+    name = name.strip().rstrip(". ")[:150].rstrip(". ")
+    return f"{name or '作者未知-标题未知'}.xlsx"
+
+
+class _LogWriter(TextIOBase):
+    def __init__(self, sink: Callable[[str], None]) -> None:
+        self.sink = sink
+        self.buffer = ""
+
+    def write(self, value: str) -> int:
+        self.buffer += value
+        while "\n" in self.buffer:
+            line, self.buffer = self.buffer.split("\n", 1)
+            if line.strip():
+                self.sink(line)
+        return len(value)
+
+    def flush(self) -> None:
+        if self.buffer.strip():
+            self.sink(self.buffer)
+        self.buffer = ""
+
+
+_task_writer: ContextVar[_LogWriter | None] = ContextVar("douyin_task_writer", default=None)
+
+
+class _TaskStdout(TextIOBase):
+    def __init__(self, fallback: TextIOBase) -> None:
+        self.fallback = fallback
+
+    def write(self, value: str) -> int:
+        writer = _task_writer.get()
+        return (writer if writer is not None else self.fallback).write(value)
+
+    def flush(self) -> None:
+        writer = _task_writer.get()
+        (writer if writer is not None else self.fallback).flush()
+
+
+class ConsoleState:
+    def __init__(self, project_root: Path) -> None:
+        self.project_root = project_root.resolve()
+        self.output_root = self.project_root / "output"
+        self.profile_dir = self.project_root / ".douyin-browser-profile"
+        self.settings_path = self.project_root / "src" / "config" / "web_console_settings.json"
+        legacy_settings_path = self.project_root / "web_console_settings.json"
+        self.xpath_settings = {
+            "pause_xpath": "",
+            "detail_xpath": (
+                "/html/body/div[2]/div[1]/div[4]/div[3]/div/div[3]/div[1]/"
+                "div[1]/div/div[1]/div/div[4]/div/div/div[1]/div[1]/div[1]/div[1]/span"
+            ),
+            "author_xpath": "",
+            "title_xpath": "",
+            "comment_xpath": "",
+        }
+        settings_source = (
+            self.settings_path
+            if self.settings_path.is_file()
+            else legacy_settings_path
+        )
+        try:
+            saved_settings = json.loads(settings_source.read_text(encoding="utf-8"))
+            if isinstance(saved_settings, dict):
+                for key in self.xpath_settings:
+                    value = saved_settings.get(key)
+                    if isinstance(value, str):
+                        self.xpath_settings[key] = value
+        except (OSError, json.JSONDecodeError):
+            pass
+        if settings_source == legacy_settings_path and legacy_settings_path.is_file():
+            try:
+                self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+                if not self.settings_path.exists():
+                    legacy_settings_path.replace(self.settings_path)
+            except OSError:
+                pass
+        self.lock = Lock()
+        self.status = "idle"
+        self.message = "等待开始"
+        self.logs: list[str] = []
+        self.run_name: str | None = None
+        self.run_log_path: Path | None = None
+        self.summary: dict[str, Any] | None = None
+        self.worker: Thread | None = None
+        self.stop_event = Event()
+        self.task_controls: dict[str, dict[str, Any]] = {}
+        self.batch_path = self.project_root / "src" / "config" / "batch_state.json"
+        self.batch: dict[str, Any] | None = None
+        try:
+            saved = json.loads(self.batch_path.read_text(encoding="utf-8"))
+            if isinstance(saved, dict) and isinstance(saved.get("items"), list):
+                self.batch = saved
+                if saved.get("status") in {"running", "stopping"}:
+                    saved["status"] = "interrupted"
+                    for item in saved["items"]:
+                        if item["status"] in {"running", "waiting_for_user", "pending"}:
+                            item["status"] = "interrupted"
+                self._save_batch_locked()
+        except (OSError, json.JSONDecodeError, KeyError):
+            pass
+
+    def _save_batch_locked(self) -> None:
+        if self.batch is None:
+            return
+        self.batch.pop("mode", None)
+        for item in self.batch.get("items", []):
+            item.pop("summary", None)
+        options = self.batch.get("options", {})
+        for key in self.xpath_settings:
+            options.pop(key, None)
+        for key, default in {"idle_rounds": 8, "scroll_pixels": 700}.items():
+            if options.get(key) == default:
+                options.pop(key)
+        # Keep the full current batch while running. Once it ends, persist only
+        # unfinished videos; completed results already live in output/.
+        saved = json.loads(json.dumps(self.batch))
+        if saved.get("status") not in {"running", "stopping"}:
+            saved["items"] = [item for item in saved.get("items", []) if item.get("status") != "succeeded"]
+            saved["current_index"] = 0
+        previous = saved.get("unfinished_batches", [])
+        if not saved.get("items") and not previous:
+            self.batch_path.unlink(missing_ok=True)
+            return
+        self.batch_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.batch_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(self.batch_path)
+
+    @staticmethod
+    def video_urls(options: dict[str, Any]) -> list[str]:
+        raw = options.get("urls", [options.get("url", "")])
+        if not isinstance(raw, list) or not raw or len(raw) > 100:
+            raise ValueError("请填写 1 至 100 个视频链接")
+        urls, seen = [], set()
+        for value in raw:
+            if not isinstance(value, str):
+                raise ValueError("视频链接必须是文本")
+            url = value.strip()
+            parsed = urlparse(url)
+            hostname = (parsed.hostname or "").lower()
+            if len(url) > 4096 or parsed.scheme not in {"http", "https"} or not (
+                hostname == "douyin.com" or hostname.endswith(".douyin.com")
+            ) or parsed.username or parsed.password:
+                raise ValueError(f"请输入有效的 douyin.com 视频地址：{url[:80]}")
+            video_id = parse_qs(parsed.query).get("modal_id", [None])[0]
+            match = re.search(r"/video/(\d+)", parsed.path)
+            key = (match.group(1) if match else video_id) or url
+            if key not in seen:
+                seen.add(key)
+                urls.append(url)
+        return urls
+
+    def log(self, message: str) -> None:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        with self.lock:
+            line = f"[{timestamp}] {message}"
+            self.logs.append(line)
+            self.logs = self.logs[-500:]
+            if self.run_log_path is not None:
+                try:
+                    with self.run_log_path.open("a", encoding="utf-8") as file:
+                        file.write(line + "\n")
+                except OSError:
+                    pass
+
+    def register_run_directory(self, run_directory: Path) -> None:
+        with self.lock:
+            self.run_name = run_directory.name
+            if self.batch and self.batch.get("status") in {"running", "stopping"}:
+                self.batch["items"][self.batch["current_index"]]["run_name"] = run_directory.name
+                self._save_batch_locked()
+            self.run_log_path = run_directory / "run.log"
+            try:
+                self.run_log_path.write_text(
+                    "\n".join(self.logs) + ("\n" if self.logs else ""),
+                    encoding="utf-8",
+                )
+            except OSError:
+                self.run_log_path = None
+
+    def clear_logs(self) -> None:
+        with self.lock:
+            self.logs.clear()
+
+    def get_xpath_settings(self) -> dict[str, str]:
+        with self.lock:
+            return dict(self.xpath_settings)
+
+    def save_xpath_settings(self, payload: dict[str, Any]) -> dict[str, str]:
+        settings: dict[str, str] = {}
+        for key in ("pause_xpath", "detail_xpath", "author_xpath", "title_xpath", "comment_xpath"):
+            value = payload.get(key, "")
+            if not isinstance(value, str) or len(value) > 4_096:
+                raise ValueError(f"{key} 必须是 4096 字符以内的 XPath 文本")
+            settings[key] = value.strip()
+        with self.lock:
+            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            self.settings_path.write_text(
+                json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            self.xpath_settings = settings
+            return dict(settings)
+
+    def initialize_page(self) -> dict[str, Any] | None:
+        with self.lock:
+            active = bool(self.batch and self.batch.get("status") in {"running", "stopping"}) or self.status in {
+                "starting",
+                "running",
+                "waiting_for_user",
+                "stopping",
+            }
+            self.logs.clear()
+            if not active and self.status in {"succeeded", "stopped", "failed"}:
+                self.status = "idle"
+                self.message = "等待开始"
+        if not active:
+            return None
+
+        candidates: list[Path] = []
+        if self.run_name:
+            try:
+                candidates.append(self.resolve_run(self.run_name))
+            except (ValueError, FileNotFoundError):
+                pass
+        if not self.batch and self.output_root.is_dir():
+            candidates.extend(
+                path
+                for path in sorted(self.output_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+                if path.is_dir() and path not in candidates
+            )
+
+        for directory in candidates:
+            try:
+                result = read_result_json(directory)
+            except (OSError, json.JSONDecodeError, AttributeError):
+                continue
+            if result.get("status") != "running":
+                continue
+            summary = result.get("summary") or {}
+            comments = result.get("comments") or []
+            self.run_name = directory.name
+            self.summary = summary
+            self.log(f"[刷新恢复] 已从 {directory.name} 的 JSON 检查点恢复采集信息")
+            self.log(
+                "[刷新恢复] 视频："
+                f"{result.get('video_publisher_nickname') or '作者未知'} · "
+                f"{result.get('video_title') or '标题未知'}；"
+                f"已保存 {summary.get('comment_count', len(comments))} 条评论"
+            )
+            return {
+                key: result.get(key)
+                for key in (
+                    "status",
+                    "source_url",
+                    "video_publisher_nickname",
+                    "video_title",
+                    "settings",
+                    "summary",
+                )
+            }
+        return None
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            status, message = self.status, self.message
+            if self.batch and self.batch.get("status") in {"running", "stopping"}:
+                if self.stop_event.is_set():
+                    status, message = "stopping", "正在停止整批任务"
+                elif status in {"succeeded", "failed", "stopped"}:
+                    status, message = "running", "准备采集下一个视频"
+            return {
+                "status": status,
+                "message": message,
+                "logs": list(self.logs),
+                "run_name": self.run_name,
+                "summary": self.summary,
+                "batch": json.loads(json.dumps(self.batch)) if self.batch else None,
+            }
+
+    def start(self, options: dict[str, Any]) -> None:
+        urls = self.video_urls(options)
+        if options.get("comment_scope", "top_level") not in {"top_level", "all"}:
+            raise ValueError("评论层级选项无效")
+        if options.get("fetch_mode", "network_first") not in {"network_first", "scroll_only"}:
+            raise ValueError("一级评论加载方式无效")
+        with self.lock:
+            if self.worker is not None and self.worker.is_alive():
+                raise RuntimeError("已有抓取任务正在运行")
+            self.status = "starting"
+            self.message = "正在启动 Chrome"
+            self.logs = []
+            self.run_name = None
+            self.run_log_path = None
+            self.summary = None
+            self.stop_event.clear()
+            self.task_controls = {url: {"stop": Event(), "continue": Event(), "logs": [], "log_path": None} for url in urls}
+            unfinished = []
+            if self.batch:
+                unfinished = json.loads(json.dumps(self.batch.get("unfinished_batches", [])))
+                remaining = [item for item in self.batch.get("items", []) if item.get("status") != "succeeded"]
+                if remaining:
+                    previous = {key: value for key, value in self.batch.items() if key != "unfinished_batches"}
+                    previous["items"] = json.loads(json.dumps(remaining))
+                    previous["current_index"] = 0
+                    unfinished.append(previous)
+            self.batch = {
+                "id": datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid4().hex[:8],
+                "status": "running", "current_index": 0,
+                "options": {key: value for key, value in options.items() if key not in {"url", "urls"}},
+                "items": [{"url": url, "status": "pending", "run_name": None, "error": ""} for url in urls],
+            }
+            if unfinished:
+                self.batch["unfinished_batches"] = unfinished
+            self._save_batch_locked()
+            self.worker = Thread(
+                target=self._run_queue,
+                args=(options, urls),
+                daemon=True,
+                name="douyin-crawler",
+            )
+            self.worker.start()
+
+    def _refresh_running_status_locked(self) -> None:
+        if self.stop_event.is_set():
+            self.status, self.message = "stopping", "正在停止整批任务"
+            return
+        waiting = [i for i in self.batch["items"] if i["status"] == "waiting_for_user"]
+        active = sum(i["status"] in {"running", "waiting_for_user", "stopping"} for i in self.batch["items"])
+        self.status = "waiting_for_user" if waiting else "running"
+        self.message = (f"{len(waiting)} 个视频需要登录或验证，完成后点击继续" if waiting else
+                        f"正在采集 {active} 个视频")
+
+    def _task_log(self, index: int, message: str) -> None:
+        with self.lock:
+            item = self.batch["items"][index]
+            control = self.task_controls[item["url"]]
+            line = f"[{datetime.now().strftime('%H:%M:%S')}] {message}"
+            control["logs"].append(line)
+            control["logs"] = control["logs"][-500:]
+            self.logs.append(f"[视频 {index + 1}] {line}")
+            self.logs = self.logs[-500:]
+            if control["log_path"] is not None:
+                try:
+                    with control["log_path"].open("a", encoding="utf-8") as file:
+                        file.write(line + "\n")
+                except OSError:
+                    pass
+
+    def _register_task_run(self, index: int, directory: Path) -> None:
+        with self.lock:
+            item = self.batch["items"][index]
+            control = self.task_controls[item["url"]]
+            item["run_name"] = directory.name
+            self.run_name = directory.name
+            control["log_path"] = directory / "run.log"
+            control["log_path"].write_text("\n".join(control["logs"]) + "\n", encoding="utf-8")
+            self._save_batch_locked()
+
+    async def _run_video(self, index: int, options: dict[str, Any], context: Any,
+                         first_login: list[bool]) -> None:
+        item = self.batch["items"][index]
+        control = self.task_controls[item["url"]]
+        stopped = lambda: self.stop_event.is_set() or control["stop"].is_set()
+        writer = _LogWriter(lambda message: self._task_log(index, message))
+        token = _task_writer.set(writer)
+
+        async def manual_continue(reason: str, minutes: int) -> None:
+            if stopped():
+                return
+            with self.lock:
+                item["status"] = "waiting_for_user"
+                self._refresh_running_status_locked()
+                self._save_batch_locked()
+            print(f"等待人工处理：{reason}（最多 {minutes} 分钟）")
+            completed = await asyncio.to_thread(control["continue"].wait, minutes * 60)
+            control["continue"].clear()
+            if not completed:
+                raise RuntimeError("等待网页确认登录/验证超时")
+            with self.lock:
+                if not stopped():
+                    first_login[0] = False
+                    item["status"] = "running"
+                self._refresh_running_status_locked()
+                self._save_batch_locked()
+
+        try:
+            options = {**options, **self.get_xpath_settings()}
+            config = CrawlerConfig(
+                url=item["url"], output_root=self.output_root, profile_dir=self.profile_dir,
+                browser_context=context, require_initial_login=first_login[0],
+                scroll_direction=str(options.get("scroll_direction", "down")),
+                comment_scope=str(options.get("comment_scope", "top_level")),
+                fetch_mode=str(options.get("fetch_mode", "network_first")),
+                fetch_douyin_id=options.get("fetch_douyin_id") is True,
+                idle_rounds=int(options.get("idle_rounds", 8)),
+                max_comments=int(options.get("max_comments", 0)),
+                max_minutes=int(options.get("max_minutes", 30)),
+                min_delay_ms=int(options.get("min_delay_ms", 800)),
+                max_delay_ms=int(options.get("max_delay_ms", 1400)),
+                scroll_pixels=int(options.get("scroll_pixels", 700)),
+                challenge_wait_minutes=int(options.get("challenge_wait_minutes", 30)),
+                pause_xpath=options["pause_xpath"], detail_xpath=options["detail_xpath"],
+                author_xpath=options["author_xpath"], title_xpath=options["title_xpath"],
+                comment_xpath=options["comment_xpath"], manual_continue=manual_continue,
+                stop_requested=stopped,
+                run_directory_ready=lambda directory: self._register_task_run(index, directory),
+            )
+            print(f"开始采集：{item['url']}")
+            directory, result = await crawl_douyin_comments(config)
+            with self.lock:
+                item["run_name"] = directory.name
+                item["status"] = "stopped" if stopped() else "succeeded"
+                self.summary = result.get("summary")
+                self.run_name = directory.name
+            print("任务已停止，保留已有数据" if stopped() else "评论采集完成")
+        except BaseException as error:
+            print(f"抓取失败：{error}")
+            print(traceback.format_exc(limit=4))
+            with self.lock:
+                item["status"] = "stopped" if stopped() else "failed"
+                item["error"] = "" if stopped() else str(error)
+                directory = getattr(error, "run_directory", None)
+                if directory:
+                    item["run_name"] = directory.name
+        finally:
+            writer.flush()
+            _task_writer.reset(token)
+            with self.lock:
+                self._refresh_running_status_locked()
+                self._save_batch_locked()
+
+    async def _run_batch_async(self, options: dict[str, Any]) -> None:
+        limit = 2 if options.get("concurrent") is True else 1
+        first_login = [not self.profile_dir.exists() or not any(self.profile_dir.iterdir())]
+        self.profile_dir.mkdir(parents=True, exist_ok=True)
+        async with async_playwright() as playwright:
+            context = await playwright.chromium.launch_persistent_context(
+                user_data_dir=str(self.profile_dir), channel="chrome", headless=False)
+            running: set[asyncio.Task] = set()
+            pending = list(range(len(self.batch["items"])))
+            try:
+                while pending or running:
+                    with self.lock:
+                        waiting = any(i["status"] == "waiting_for_user" for i in self.batch["items"])
+                        while (pending and len(running) < limit and not self.stop_event.is_set()
+                               and not waiting and not (first_login[0] and running)):
+                            index = pending.pop(0)
+                            item = self.batch["items"][index]
+                            if item["status"] != "pending":
+                                continue
+                            self.batch["current_index"] = index
+                            item["status"] = "running"
+                            running.add(asyncio.create_task(self._run_video(index, options, context, first_login)))
+                            self._refresh_running_status_locked()
+                            self._save_batch_locked()
+                    if not running:
+                        break
+                    done, _ = await asyncio.wait(running, timeout=.15, return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        task.result()
+                    running.difference_update(done)
+                    # Conservative spacing between dispatch rounds; never blocks UI requests.
+                    if done and pending:
+                        await asyncio.sleep(1)
+            finally:
+                if running:
+                    self.stop_event.set()
+                    for control in self.task_controls.values():
+                        control["continue"].set()
+                    await asyncio.gather(*running, return_exceptions=True)
+                await context.close()
+
+    def _run_queue(self, options: dict[str, Any], urls: list[str]) -> None:
+        try:
+            self.log("并发采集已开启（最多 2 个视频）" if options.get("concurrent") is True else "按顺序采集视频")
+            with redirect_stdout(_TaskStdout(sys.stdout)):
+                asyncio.run(self._run_batch_async(options))
+        except Exception as error:
+            self.log(f"批次异常：{error}")
+            with self.lock:
+                for item in self.batch["items"]:
+                    if item["status"] in {"pending", "running", "waiting_for_user", "stopping"}:
+                        item.update(status="stopped" if self.stop_event.is_set() else "failed", error=str(error))
+        finally:
+            with self.lock:
+                for item in self.batch["items"]:
+                    if item["status"] == "pending":
+                        item["status"] = "cancelled"
+                failures = sum(i["status"] == "failed" for i in self.batch["items"])
+                successes = sum(i["status"] == "succeeded" for i in self.batch["items"])
+                stopped_count = sum(i["status"] == "stopped" for i in self.batch["items"])
+                self.status = ("stopped" if self.stop_event.is_set() else "succeeded" if successes
+                               else "failed" if failures else "stopped")
+                self.batch["status"] = self.status
+                self.message = (f"采集结束：完成 {successes} 个，失败 {failures} 个，停止 {stopped_count} 个"
+                                if not self.stop_event.is_set() else "整批任务已停止，已保留采集结果")
+                if len(self.batch["items"]) == 1:
+                    item = self.batch["items"][0]
+                    self.message = ("任务已停止，已保留采集结果" if self.status == "stopped" else
+                                    item["error"] if failures else "评论采集完成")
+                self._save_batch_locked()
+
+    def continue_after_login(self) -> None:
+        with self.lock:
+            waiting = [i for i in self.batch["items"] if i["status"] == "waiting_for_user"] if self.batch else []
+            if not waiting:
+                raise RuntimeError("当前没有等待登录/验证的任务")
+            for item in waiting:
+                self.task_controls[item["url"]]["continue"].set()
+
+    def stop_task(self, batch_id: str, url: str) -> None:
+        with self.lock:
+            if not self.worker or not self.worker.is_alive() or not self.batch:
+                raise RuntimeError("当前没有正在运行的队列")
+            if self.batch["id"] != batch_id or self.stop_event.is_set():
+                raise RuntimeError("该任务不属于当前运行队列，或整批任务正在停止")
+            item = next((i for i in self.batch["items"] if i["url"] == url), None)
+            if not item or item["status"] not in {"pending", "running", "waiting_for_user"}:
+                raise RuntimeError("该任务已结束或正在停止")
+            if item["status"] == "pending":
+                item["status"] = "stopped"
+            else:
+                item["status"] = "stopping"
+                control = self.task_controls[url]
+                control["stop"].set()
+                control["continue"].set()
+            self._refresh_running_status_locked()
+            self._save_batch_locked()
+
+    def stop(self) -> None:
+        with self.lock:
+            if not self.worker or not self.worker.is_alive():
+                raise RuntimeError("当前没有正在运行的任务")
+            self.stop_event.set()
+            self.batch["status"] = "stopping"
+            for control in self.task_controls.values():
+                control["continue"].set()
+            self._refresh_running_status_locked()
+            self._save_batch_locked()
+
+    def resolve_run(self, name: str) -> Path:
+        if not name or name in {".", ".."} or Path(name).name != name:
+            raise ValueError("无效的结果目录")
+        path = (self.output_root / name).resolve()
+        if path.parent != self.output_root.resolve() or not path.is_dir():
+            raise FileNotFoundError("结果目录不存在")
+        return path
+
+    def delete_run(self, name: str) -> None:
+        with self.lock:
+            if self.worker is not None and self.worker.is_alive():
+                raise RuntimeError("采集任务运行期间不能删除结果目录")
+            if not self.output_root.exists():
+                raise FileNotFoundError("结果目录不存在")
+            if (
+                self.output_root.is_symlink()
+                or self.output_root.resolve().parent != self.project_root
+            ):
+                raise ValueError("结果根目录位置异常，拒绝删除")
+            candidate = self.output_root / name
+            if candidate.is_symlink():
+                raise ValueError("不允许删除符号链接目录")
+            path = self.resolve_run(name)
+            if not (path / "comments.json").is_file():
+                raise ValueError("该目录不是有效的采集结果目录")
+            shutil.rmtree(path)
+
+    def list_runs(self) -> list[dict[str, Any]]:
+        if not self.output_root.exists():
+            return []
+        runs: list[dict[str, Any]] = []
+        for directory in sorted(self.output_root.iterdir(), reverse=True):
+            json_path = directory / "comments.json"
+            if not directory.is_dir() or not json_path.is_file():
+                continue
+            try:
+                payload = read_result_json(directory)
+                summary = payload.get("summary") or {}
+                runs.append(
+                    {
+                        "name": directory.name,
+                        "video_publisher_nickname": payload.get(
+                            "video_publisher_nickname", ""
+                        ),
+                        "video_title": payload.get("video_title", ""),
+                        "status": payload.get("status", "unknown"),
+                        "source_url": payload.get("source_url", ""),
+                        "comment_count": summary.get("comment_count", 0),
+                        "image_count": summary.get("image_count", 0),
+                        "started_at": payload.get("started_at", ""),
+                    }
+                )
+            except (OSError, json.JSONDecodeError):
+                continue
+        return runs
+
+
+class ConsoleServer(ThreadingHTTPServer):
+    def __init__(self, address: tuple[str, int], state: ConsoleState) -> None:
+        super().__init__(address, ConsoleRequestHandler)
+        self.state = state
+
+
+class ConsoleRequestHandler(BaseHTTPRequestHandler):
+    server: ConsoleServer
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def _send_bytes(
+        self,
+        status: int,
+        body: bytes,
+        content_type: str,
+        disposition: str | None = None,
+    ) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if disposition:
+            self.send_header("Content-Disposition", disposition)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, status: int, payload: Any) -> None:
+        self._send_bytes(
+            status,
+            json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            "application/json; charset=utf-8",
+        )
+
+    def _read_json(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0 or length > 64 * 1024:
+            raise ValueError("请求内容为空或过大")
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("请求格式错误")
+        return payload
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        try:
+            if path in {"/", "/index.html"}:
+                body = load_console_html()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header(
+                    "Content-Security-Policy",
+                    "default-src 'none'; style-src 'unsafe-inline'; "
+                    "script-src 'unsafe-inline'; img-src 'self' data:; "
+                    "connect-src 'self'; base-uri 'none'; form-action 'none'; "
+                    "frame-ancestors 'none'",
+                )
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if path == "/api/status":
+                self._json(200, self.server.state.snapshot())
+                return
+            if path == "/api/settings":
+                self._json(200, self.server.state.get_xpath_settings())
+                return
+            if path == "/api/runs":
+                self._json(200, self.server.state.list_runs())
+                return
+            parts = [unquote(part) for part in path.split("/") if part]
+            if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "comments":
+                run = self.server.state.resolve_run(parts[2])
+                body = json.dumps(
+                    read_result_json(run), ensure_ascii=False, indent=2
+                ).encode("utf-8")
+                self._send_bytes(200, body, "application/json; charset=utf-8")
+                return
+            if len(parts) == 5 and parts[:2] == ["api", "runs"] and parts[3] == "files":
+                run = self.server.state.resolve_run(parts[2])
+                filename = parts[4]
+                relative_path = Path(filename)
+                if relative_path.is_absolute() or not filename or ".." in relative_path.parts:
+                    raise ValueError("无效文件名")
+                file_path = (run / relative_path).resolve()
+                if not file_path.is_relative_to(run.resolve()) or not file_path.is_file():
+                    raise FileNotFoundError("图片不存在")
+                media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                self._send_bytes(200, file_path.read_bytes(), media_type)
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "excel":
+                run = self.server.state.resolve_run(parts[2])
+                filename = excel_download_filename(read_result_json(run))
+                output_path = run / "comments.xlsx"
+                export_comments_to_excel(run / "comments.json", output_path)
+                self._send_bytes(
+                    200,
+                    output_path.read_bytes(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    'attachment; filename="comments.xlsx"; '
+                    f"filename*=UTF-8''{quote(filename, safe='')}",
+                )
+                return
+            self.send_error(404)
+        except (ValueError, FileNotFoundError, OSError, RuntimeError) as error:
+            self._json(400, {"error": str(error)})
+
+    def do_POST(self) -> None:
+        try:
+            if self.path == "/api/crawl/start":
+                options = self._read_json()
+                if options.get("comment_scope", "top_level") not in {
+                    "top_level",
+                    "all",
+                }:
+                    raise ValueError("评论层级选项无效")
+                if options.get("fetch_mode", "network_first") not in {
+                    "network_first",
+                    "scroll_only",
+                }:
+                    raise ValueError("一级评论加载方式无效")
+                self.server.state.start(options)
+                self._json(202, {"ok": True})
+                return
+            if self.path == "/api/settings":
+                settings = self.server.state.save_xpath_settings(self._read_json())
+                self._json(200, {"ok": True, **settings})
+                return
+            if self.path == "/api/crawl/continue":
+                self.server.state.continue_after_login()
+                self._json(200, {"ok": True})
+                return
+            if self.path == "/api/crawl/stop":
+                self.server.state.stop()
+                self._json(200, {"ok": True})
+                return
+            if self.path == "/api/crawl/stop-task":
+                payload = self._read_json()
+                self.server.state.stop_task(str(payload.get("batch_id", "")), str(payload.get("url", "")))
+                self._json(200, {"ok": True})
+                return
+            if self.path == "/api/logs/clear":
+                self.server.state.clear_logs()
+                self._json(200, {"ok": True})
+                return
+            if self.path == "/api/page/initialize":
+                run = self.server.state.initialize_page()
+                with self.server.state.lock:
+                    try:
+                        batch = json.loads(self.server.state.batch_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        batch = None
+                self._json(200, {"ok": True, "run": run, "batch": batch})
+                return
+            if self.path == "/api/runs/delete":
+                payload = self._read_json()
+                name = str(payload.get("name", ""))
+                self.server.state.delete_run(name)
+                self._json(200, {"ok": True})
+                return
+            self.send_error(404)
+        except (ValueError, FileNotFoundError, OSError, RuntimeError, json.JSONDecodeError) as error:
+            self._json(400, {"error": str(error)})
+
+
+def create_console_server(
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    project_root: Path | None = None,
+) -> ConsoleServer:
+    root = project_root or Path(__file__).resolve().parents[1]
+    return ConsoleServer((host, port), ConsoleState(root))
+
+
+def build_parser() -> ArgumentParser:
+    parser = ArgumentParser(description="启动抖音评论工具网页控制台")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--no-open", action="store_true")
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    server = create_console_server(args.host, args.port)
+    url = f"http://{args.host}:{server.server_address[1]}/"
+    print(f"抖音评论工具已启动：{url}")
+    if not args.no_open:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

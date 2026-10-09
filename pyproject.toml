@@ -9,16 +9,20 @@ description = "A conservative Playwright crawler for first-level Douyin comments
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "openpyxl>=3.1,<4",
   "Pillow>=10,<13",
   "playwright>=1.50,<2",
 ]
 
 [project.scripts]
-douyin-comments = "douyin_comment_crawler.cli:main"
-douyin-comment-viewer = "douyin_comment_crawler.viewer:main"
+douyin-web = "web_console:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-douyin_comment_crawler = ["viewer.html"]
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = [
+  "comments",
+  "crawler",
+  "export_comments_excel",
+  "output",
+  "web_console",
+]

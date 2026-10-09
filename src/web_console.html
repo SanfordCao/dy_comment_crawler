@@ -1,0 +1,2360 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>抖音评论调研工作台</title>
+    <style>
+        :root {
+            --ink: #17211e;
+            --muted: #66736e;
+            --paper: #f6f3eb;
+            --card: #fffdf8;
+            --line: #d9ddd7;
+            --teal: #0f766e;
+            --teal2: #115e59;
+            --red: #e2554f;
+            --gold: #d7a938;
+            --shadow: 0 16px 45px rgba(23, 33, 30, .09)
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            background: radial-gradient(circle at 10% 0, #dceee8 0, transparent 30%), var(--paper);
+            font: 15px/1.6 system-ui, -apple-system, "Microsoft YaHei", sans-serif
+        }
+
+        button, input, select, textarea {
+            font: inherit
+        }
+
+        button {
+            cursor: pointer
+        }
+
+        .shell {
+            max-width: 1260px;
+            margin: auto;
+            padding: 30px 22px 70px
+        }
+
+        .top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 20px;
+            margin-bottom: 24px
+        }
+
+        .eyebrow {
+            color: var(--teal);
+            font-weight: 800;
+            letter-spacing: .14em;
+            text-transform: uppercase
+        }
+
+        .top h1 {
+            margin: 3px 0 0;
+            font-size: clamp(30px, 5vw, 54px);
+            line-height: 1.1;
+            letter-spacing: -.04em
+        }
+
+        .top p {
+            margin: 8px 0 0;
+            color: var(--muted)
+        }
+
+        .privacy {
+            border: 1px solid #b9d2ca;
+            background: #edf8f4;
+            padding: 8px 13px;
+            border-radius: 999px;
+            color: var(--teal2);
+            white-space: nowrap
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 18px
+        }
+
+        .tab {
+            border: 1px solid var(--line);
+            background: #ffffffaa;
+            padding: 10px 18px;
+            border-radius: 999px;
+            color: var(--muted)
+        }
+
+        .tab.active {
+            background: var(--ink);
+            border-color: var(--ink);
+            color: white
+        }
+
+        .view {
+            display: none
+        }
+
+        .view.active {
+            display: block
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns:minmax(0, 1.12fr) minmax(320px, .88fr);
+            gap: 20px
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid #e2e0d8;
+            border-radius: 22px;
+            box-shadow: var(--shadow);
+            padding: 22px
+        }
+
+        .card h2 {
+            margin: 0 0 16px;
+            font-size: 20px
+        }
+
+        .field {
+            margin-bottom: 15px
+        }
+
+        .field label {
+            display: block;
+            font-weight: 700;
+            margin-bottom: 6px
+        }
+
+        .field small {
+            color: var(--muted)
+        }
+
+        input, select {
+            width: 100%;
+            border: 1px solid var(--line);
+            background: white;
+            border-radius: 12px;
+            padding: 11px 12px;
+            color: var(--ink);
+            outline: none
+        }
+
+        input:focus, select:focus {
+            border-color: var(--teal);
+            box-shadow: 0 0 0 3px #0f766e18
+        }
+
+        .row {
+            display: grid;
+            grid-template-columns:repeat(2, 1fr);
+            gap: 12px
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 20px
+        }
+
+        .btn {
+            border: 0;
+            border-radius: 12px;
+            padding: 11px 17px;
+            font-weight: 800;
+            background: #e8ebe7;
+            color: var(--ink)
+        }
+
+        .btn.primary {
+            background: var(--teal);
+            color: white
+        }
+
+        .btn.primary:hover {
+            background: var(--teal2)
+        }
+
+        .btn.danger {
+            background: #fae9e6;
+            color: #a5322d
+        }
+
+        .btn:disabled {
+            opacity: .45;
+            cursor: not-allowed
+        }
+
+        .statusline {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 14px
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #9ba39f
+        }
+
+        .dot.running {
+            background: var(--gold);
+            box-shadow: 0 0 0 6px #d7a93820
+        }
+
+        .dot.succeeded {
+            background: #2d9d72
+        }
+
+        .dot.failed {
+            background: var(--red)
+        }
+
+        .log {
+            height: 390px;
+            overflow: auto;
+            background: #14201c;
+            color: #cfe6dc;
+            border-radius: 14px;
+            padding: 14px;
+            font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace;
+            white-space: pre-wrap
+        }
+
+        .waiting {
+            display: none;
+            background: #fff5d7;
+            border: 1px solid #ead78c;
+            border-radius: 14px;
+            padding: 14px;
+            margin-bottom: 12px
+        }
+
+        .waiting.show {
+            display: block
+        }
+
+        .history-layout {
+            display: grid;
+            grid-template-columns:330px minmax(0, 1fr);
+            gap: 20px
+        }
+
+        .runs {
+            display: grid;
+            gap: 9px;
+            max-height: 680px;
+            overflow: auto
+        }
+
+        .run-item {
+            display: grid;
+            grid-template-columns:minmax(0, 1fr) auto;
+            gap: 6px;
+            align-items: stretch
+        }
+
+        .run {
+            width: 100%;
+            text-align: left;
+            border: 1px solid var(--line);
+            background: white;
+            border-radius: 14px;
+            padding: 12px
+        }
+
+        .run.active {
+            border-color: var(--teal);
+            box-shadow: 0 0 0 2px #0f766e20
+        }
+
+        .run strong, .run span {
+            display: block
+        }
+
+        .run span {
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: 3px
+        }
+
+        .run-delete {
+            align-self: stretch;
+            border: 1px solid #f0c9c5;
+            background: #fff8f7;
+            color: #a5322d;
+            border-radius: 12px;
+            padding: 0 10px;
+            font-size: 12px
+        }
+
+        .run-delete:hover {
+            background: #fae9e6
+        }
+
+        .toolbar {
+            display: grid;
+            grid-template-columns:minmax(180px, 1fr) 150px 150px auto;
+            gap: 9px;
+            margin-bottom: 14px
+        }
+
+        .summary {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 14px
+        }
+
+        .summary h2 {
+            margin: 0
+        }
+
+        .summary p {
+            margin: 0;
+            color: var(--muted)
+        }
+
+        .comments {
+            display: grid;
+            gap: 12px
+        }
+
+        .comment {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: white;
+            padding: 15px
+        }
+
+        .comment-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            color: var(--muted);
+            font-size: 13px
+        }
+
+        .comment-text {
+            white-space: pre-wrap;
+            margin: 9px 0;
+            font-size: 16px
+        }
+
+        .metrics {
+            display: flex;
+            gap: 14px;
+            color: var(--muted);
+            font-size: 13px
+        }
+
+        .images {
+            display: flex;
+            gap: 8px;
+            overflow: auto;
+            margin-top: 11px
+        }
+
+        .images img {
+            height: 130px;
+            max-width: 220px;
+            object-fit: cover;
+            border-radius: 10px;
+            background: #eee
+        }
+
+        .empty {
+            text-align: center;
+            color: var(--muted);
+            padding: 60px 20px
+        }
+
+        .more {
+            width: 100%;
+            margin-top: 14px
+        }
+
+        .notice {
+            padding: 12px 14px;
+            border-radius: 12px;
+            background: #edf8f4;
+            color: var(--teal2);
+            margin-bottom: 15px;
+            display: none
+        }
+
+        .notice.show {
+            display: block
+        }
+
+        @media (max-width: 850px) {
+            .top {
+                align-items: flex-start;
+                flex-direction: column
+            }
+
+            .grid, .history-layout {
+                grid-template-columns:1fr
+            }
+
+            .toolbar {
+                grid-template-columns:1fr 1fr
+            }
+
+            .toolbar input {
+                grid-column: 1/-1
+            }
+
+            .privacy {
+                white-space: normal
+            }
+
+            .log {
+                height: 280px
+            }
+        }
+
+        .summary-actions {
+            display: flex;
+            align-items: center;
+            gap: 9px
+        }
+
+        .icon-button {
+            width: 42px;
+            height: 42px;
+            display: grid;
+            place-items: center;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: #fff;
+            color: #a5322d;
+            transition: background .15s, border-color .15s, transform .15s
+        }
+
+        .icon-button:hover:not(:disabled) {
+            background: #fff0ed;
+            border-color: #e8b9b3;
+            transform: translateY(-1px)
+        }
+
+        .icon-button:disabled {
+            opacity: .38;
+            cursor: not-allowed
+        }
+
+        .icon-button svg {
+            width: 19px;
+            height: 19px
+        }
+
+        .dialog-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 20;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(18, 29, 26, .45);
+            backdrop-filter: blur(4px)
+        }
+
+        .dialog-backdrop.show {
+            display: flex
+        }
+
+        .dialog {
+            width: min(100%, 440px);
+            padding: 26px;
+            border: 1px solid #e7e4dc;
+            border-radius: 22px;
+            background: var(--card);
+            box-shadow: 0 24px 80px #101a1740;
+            animation: dialog-in .18s ease-out
+        }
+
+        .dialog-icon {
+            width: 46px;
+            height: 46px;
+            display: grid;
+            place-items: center;
+            border-radius: 15px;
+            background: #fff0ed;
+            color: #b63d35
+        }
+
+        .dialog-icon svg {
+            width: 22px;
+            height: 22px
+        }
+
+        .dialog h2 {
+            margin: 15px 0 5px;
+            font-size: 22px
+        }
+
+        .dialog p {
+            margin: 0;
+            color: var(--muted)
+        }
+
+        .dialog .dialog-error {
+            margin-top: 8px;
+            color: #a5322d
+        }
+
+        .dialog-name {
+            margin-top: 14px;
+            padding: 11px 13px;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: #f8f7f2;
+            font-weight: 700;
+            overflow-wrap: anywhere
+        }
+
+        .dialog-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 23px
+        }
+
+        .dialog-actions .btn {
+            min-width: 92px
+        }
+
+        .dialog-actions .btn.danger {
+            background: #c7463d;
+            color: white
+        }
+
+        .dialog-actions .btn.danger:hover {
+            background: #a9352e
+        }
+
+        @keyframes dialog-in {
+            from {
+                opacity: 0;
+                transform: translateY(8px) scale(.98)
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1)
+            }
+        }
+
+        .image-preview {
+            position: fixed;
+            inset: 0;
+            z-index: 30;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 48px;
+            background: rgba(12, 16, 15, .88);
+            backdrop-filter: blur(5px)
+        }
+
+        .image-preview.show {
+            display: flex
+        }
+
+        .image-preview img {
+            display: block;
+            max-width: min(100%, 1400px);
+            max-height: calc(100vh - 96px);
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            border-radius: 8px;
+            box-shadow: 0 20px 70px #0008
+        }
+
+        .image-preview-close {
+            position: absolute;
+            top: 18px;
+            right: 20px;
+            width: 44px;
+            height: 44px;
+            display: grid;
+            place-items: center;
+            border: 1px solid #ffffff50;
+            border-radius: 50%;
+            background: #ffffff18;
+            color: white;
+            font-size: 27px;
+            line-height: 1
+        }
+
+        .image-preview-close:hover {
+            background: #ffffff30
+        }
+
+        .images img {
+            cursor: zoom-in;
+            transition: transform .15s
+        }
+
+        .images img:hover {
+            transform: scale(1.025)
+        }
+
+        @media (max-width: 600px) {
+            .image-preview {
+                padding: 18px
+            }
+
+            .image-preview img {
+                max-height: calc(100vh - 36px)
+            }
+        }
+
+        .run {
+            height: 82px;
+            min-height: 82px;
+            max-height: 82px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 6px;
+            overflow: hidden
+        }
+
+        .run-heading {
+            display: block;
+            min-width: 0;
+            overflow: hidden;
+            line-height: 20px;
+            white-space: nowrap
+        }
+
+        .run-label {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap
+        }
+
+        .run.active .run-label {
+            font-weight: 750
+        }
+
+        .run .run-id {
+            margin-top: 0;
+            overflow: hidden;
+            color: var(--muted);
+            font-size: 11px;
+            line-height: 1.3;
+            text-overflow: ellipsis;
+            white-space: nowrap
+        }
+
+        .selected-run-heading {
+            flex: 1;
+            min-width: 0
+        }
+
+        .selected-run-heading h2 {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap
+        }
+
+        .dialog-run-primary {
+            min-width: 0;
+            overflow: hidden;
+            font-weight: 750;
+            text-overflow: ellipsis;
+            white-space: nowrap
+        }
+
+        .dialog-run-id {
+            margin-top: 5px;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 500
+        }
+
+        .history-layout {
+            height: calc(100vh - 225px);
+            min-height: 480px;
+            align-items: stretch
+        }
+
+        .history-layout > .card {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden
+        }
+
+        .history-layout .runs {
+            flex: 1;
+            min-height: 0;
+            max-height: none;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            padding-right: 4px;
+            align-content: start;
+            gap: 8px
+        }
+
+        .history-layout > section.card > .summary, .history-layout > section.card > .toolbar {
+            flex-shrink: 0
+        }
+
+        .comments-scroll {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            padding-right: 5px
+        }
+
+        .comments-scroll > .more {
+            margin-bottom: 4px
+        }
+
+        .history-layout .comments {
+            min-height: 100%;
+            align-content: start
+        }
+
+        @media (max-width: 850px) {
+            .history-layout {
+                height: auto;
+                min-height: 0;
+                grid-template-rows:minmax(220px, 34vh) minmax(420px, 62vh)
+            }
+
+            .history-layout > .card {
+                min-height: 0
+            }
+
+            .comments-scroll {
+                min-height: 0
+            }
+        }
+
+        .log-card {
+            height: clamp(360px, calc(100vh - 290px), 760px);
+            min-height: 0;
+            max-height: calc(100vh - 150px)
+        }
+
+        .log-card > .log {
+            height: 0;
+            min-height: 0;
+            flex: 1;
+            overflow-y: auto;
+            scroll-behavior: auto
+        }
+
+        .log-card > .statusline {
+            flex-shrink: 0
+        }
+
+        @media (max-width: 850px) {
+            .log-card {
+                height: clamp(320px, calc(100vh - 280px), 640px);
+                max-height: calc(100vh - 120px)
+            }
+
+            .log-card > .log {
+                min-height: 0
+            }
+        }
+
+        .grid {
+            grid-template-columns:minmax(360px, .92fr) minmax(460px, 1.08fr);
+            align-items: start
+        }
+
+        .capture-card {
+            height: auto
+        }
+
+        .advanced-toggle {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 2px 0 14px;
+            padding: 11px 13px;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: #f8f7f2;
+            color: var(--ink);
+            font-weight: 750;
+            text-align: left
+        }
+
+        .advanced-toggle:hover {
+            border-color: #9dc3b9;
+            background: #f2f8f5
+        }
+
+        .advanced-toggle span:last-child {
+            color: var(--teal);
+            font-size: 13px
+        }
+
+        .advanced-settings {
+            padding: 2px 12px 1px;
+            border-left: 2px solid #b9d2ca;
+            margin: 0 0 8px 2px
+        }
+
+        .advanced-settings[hidden] {
+            display: none
+        }
+
+        .log-card {
+            display: flex;
+            flex-direction: column;
+            min-height: 620px
+        }
+
+        .log {
+            height: auto;
+            min-height: 480px;
+            flex: 1;
+            overscroll-behavior: contain
+        }
+
+        .statusline {
+            flex-shrink: 0
+        }
+
+        .waiting, .notice {
+            flex-shrink: 0
+        }
+
+        @media (max-width: 1000px) {
+            .grid {
+                grid-template-columns:minmax(320px, .9fr) minmax(380px, 1.1fr)
+            }
+        }
+
+        @media (max-width: 850px) {
+            .grid {
+                grid-template-columns:1fr
+            }
+
+            .log-card {
+                min-height: 520px
+            }
+
+            .log {
+                min-height: 390px
+            }
+        }
+
+        .field textarea {
+            display: block;
+            width: 100%;
+            min-height: 82px;
+            resize: vertical;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 11px 12px;
+            color: var(--ink);
+            background: white;
+            outline: none;
+            font: 13px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace
+        }
+
+        .field textarea:focus {
+            border-color: var(--teal);
+            box-shadow: 0 0 0 3px #0f766e18
+        }
+
+        .stopping-header {
+            display: flex;
+            align-items: center;
+            gap: 12px
+        }
+
+        .stopping-header .dialog-icon {
+            flex: none;
+            margin: 0
+        }
+
+        .stopping-header h2 {
+            margin: 0
+        }
+
+        .field .account-toggle {
+            position: relative;
+            display: flex;
+            width: fit-content;
+            max-width: 100%;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer
+        }
+
+        .account-toggle input {
+            position: absolute;
+            opacity: 0;
+            width: 1px;
+            height: 1px
+        }
+
+        .account-switch {
+            position: relative;
+            display: inline-block;
+            width: 42px;
+            height: 24px;
+            background: #bac4bd;
+            border-radius: 99px;
+            flex: none;
+            transition: background .15s
+        }
+
+        .account-switch:after {
+            content: "";
+            position: absolute;
+            left: 3px;
+            top: 3px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: white;
+            transition: transform .15s
+        }
+
+        .account-toggle input:checked + .account-switch {
+            background: var(--teal)
+        }
+
+        .account-toggle input:checked + .account-switch:after {
+            transform: translateX(18px)
+        }
+
+        .account-toggle input:focus-visible + .account-switch {
+            outline: 3px solid #0f766e55;
+            outline-offset: 3px
+        }
+
+        .comment-account {
+            margin-top: 4px;
+            color: var(--muted);
+            font-size: 13px;
+            overflow-wrap: anywhere;
+            user-select: text
+        }
+
+        select {
+            appearance: none;
+            -webkit-appearance: none;
+            min-height: 46px;
+            padding-right: 40px;
+            cursor: pointer;
+            background-color: #fff;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 14px center;
+            transition: border-color .15s, box-shadow .15s, background-color .15s
+        }
+
+        select:hover:not(:disabled) {
+            border-color: #8bb8ad;
+            background-color: #f7fbf9
+        }
+
+        select:focus-visible {
+            border-color: var(--teal);
+            box-shadow: 0 0 0 3px #0f766e20
+        }
+
+        select:disabled {
+            background-color: #f0f2ed;
+            color: #9aa39e;
+            cursor: not-allowed;
+            opacity: .7
+        }
+
+        select option {
+            background: #fffdf8;
+            color: var(--ink)
+        }
+
+        @supports (appearance:base-select) {
+            select, select::picker(select) {
+                appearance: base-select
+            }
+
+            select {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                background-image: none;
+                padding-right: 14px
+            }
+
+            select::picker-icon {
+                content: "";
+                width: 8px;
+                height: 8px;
+                margin-left: auto;
+                margin-right: 3px;
+                border-right: 2px solid var(--teal);
+                border-bottom: 2px solid var(--teal);
+                transform: rotate(45deg);
+                transition: transform .15s
+            }
+
+            select:open::picker-icon {
+                transform: rotate(225deg)
+            }
+
+            select:open {
+                border-color: var(--teal);
+                box-shadow: 0 0 0 3px #0f766e20
+            }
+
+            select::picker(select) {
+                margin-block: 6px;
+                padding: 5px;
+                border: 1px solid #c9dbd3;
+                border-radius: 13px;
+                background: var(--card);
+                box-shadow: 0 12px 30px #17211e1f;
+                max-height: 260px;
+                overflow-y: auto
+            }
+
+            select option {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                min-height: 40px;
+                padding: 9px 12px;
+                border-radius: 8px;
+                cursor: pointer;
+                white-space: normal;
+                line-height: 1.5
+            }
+
+            select option:hover, select option:focus {
+                background: #eef6f2;
+                outline: none
+            }
+
+            select option:checked {
+                background: #e2f1eb;
+                color: var(--teal2);
+                font-weight: 700
+            }
+
+            select option::checkmark {
+                order: 1;
+                margin-left: auto;
+                color: var(--teal)
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            select, select::picker-icon {
+                transition: none
+            }
+        }
+
+        .toolbar {
+            grid-template-columns:minmax(140px, 1fr) 130px auto auto;
+            align-items: center
+        }
+
+        .history-advanced {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            min-height: 46px;
+            padding: 10px 12px;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: #edf8f4;
+            cursor: pointer;
+            color: var(--teal);
+            font-size: 13px;
+            font-weight: 700;
+            white-space: nowrap
+        }
+
+        .history-advanced::after {
+            content: "⌄"
+        }
+
+        .history-advanced[aria-expanded="true"]::after {
+            content: "⌃"
+        }
+
+        .history-advanced:hover {
+            border-color: #8bb8ad;
+            background: #e2f1eb
+        }
+
+        .history-advanced:focus-visible {
+            outline: 3px solid #0f766e20;
+            outline-offset: 2px
+        }
+
+        .time-filter[hidden] {
+            display: none
+        }
+
+        .time-filter {
+            grid-column: 1/-1;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px 12px;
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: #f8f7f2;
+            color: var(--muted);
+            font-size: 13px
+        }
+
+        .time-filter span {
+            font-weight: 700;
+            color: var(--ink)
+        }
+
+        .toolbar .time-filter input {
+            width: 260px;
+            max-width: 100%;
+            min-width: 0;
+            grid-column: auto
+        }
+
+        .time-filter small {
+            font-size: 12px
+        }
+
+        @media (max-width: 1100px) {
+            .toolbar {
+                grid-template-columns:minmax(0, 1fr) auto auto
+            }
+
+            .toolbar > #search {
+                grid-column: 1/-1
+            }
+        }
+
+        @media (max-width: 600px) {
+            .toolbar {
+                grid-template-columns:minmax(0, 1fr) minmax(0, 1fr)
+            }
+
+            .history-advanced {
+                width: 100%;
+                justify-content: center
+            }
+
+            .toolbar > #clear {
+                width: 100%
+            }
+        }
+
+        .run-item {
+            height: 82px;
+            min-height: 82px
+        }
+
+        .run-item-actions {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 6px
+        }
+
+        .run-item-actions .icon-button {
+            width: 32px;
+            height: 32px;
+            border-radius: 10px
+        }
+
+        .run-item-actions .run-export {
+            color: var(--teal)
+        }
+
+        .run-item-actions .run-export:hover {
+            background: #edf8f4;
+            border-color: #9dc3b9
+        }
+
+        .shell {
+            max-width: 1600px
+        }
+
+        .history-layout {
+            grid-template-columns:380px minmax(0, 1fr)
+        }
+
+        @media (max-width: 1000px) {
+            .history-layout {
+                grid-template-columns:300px minmax(0, 1fr)
+            }
+        }
+
+        @media (max-width: 850px) {
+            .history-layout {
+                grid-template-columns:1fr
+            }
+        }
+
+        .run .run-label {
+            margin-top: 0;
+            font-size: 15px;
+            line-height: 23px;
+            font-weight: 600;
+            color: var(--ink);
+            transition: font-size .15s, color .15s
+        }
+
+        .run .run-id {
+            font-size: 12px;
+            line-height: 17px
+        }
+
+        .run-heading {
+            line-height: 23px
+        }
+
+        .run.active {
+            background: #e9f5ef;
+            border-color: var(--teal);
+            box-shadow: inset 4px 0 0 var(--teal), 0 0 0 2px #0f766e20
+        }
+
+        .run.active .run-label {
+            font-size: 17px;
+            line-height: 25px;
+            font-weight: 850;
+            color: var(--teal2)
+        }
+
+        .run.active .run-heading {
+            line-height: 25px
+        }
+
+        .run.active .run-id {
+            font-size: 13px;
+            font-weight: 650;
+            color: var(--teal2)
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .run .run-label {
+                transition: none
+            }
+        }
+
+        .toast-stack {
+            position: fixed;
+            top: 22px;
+            right: 22px;
+            z-index: 60;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            width: min(400px, calc(100vw - 32px));
+            pointer-events: none
+        }
+
+        .toast {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 14px 16px;
+            border: 1px solid #b9d2ca;
+            border-radius: 14px;
+            background: #edf8f4;
+            color: var(--teal2);
+            box-shadow: 0 12px 35px #17211e24;
+            pointer-events: auto;
+            overflow-wrap: anywhere;
+            animation: toast-in .25s ease-out
+        }
+
+        .toast.error {
+            background: #fff1ef;
+            border-color: #ebc2bc;
+            color: #a5322d
+        }
+
+        .toast-icon {
+            flex: none;
+            font-weight: 800
+        }
+
+        .toast-message {
+            flex: 1;
+            min-width: 0
+        }
+
+        .toast-close {
+            flex: none;
+            border: 0;
+            background: transparent;
+            color: inherit;
+            font-size: 20px;
+            line-height: 1;
+            padding: 2px;
+            opacity: .65
+        }
+
+        .toast-close:hover {
+            opacity: 1
+        }
+
+        .toast.leaving {
+            animation: toast-out .2s ease-in forwards
+        }
+
+        @keyframes toast-in {
+            from {
+                opacity: 0;
+                transform: translateX(110%)
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0)
+            }
+        }
+
+        @keyframes toast-out {
+            to {
+                opacity: 0;
+                transform: translateX(110%)
+            }
+        }
+
+        @media (max-width: 600px) {
+            .toast-stack {
+                top: 16px;
+                right: 16px
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .toast, .toast.leaving {
+                animation: none
+            }
+        }
+
+        .field[hidden], .batch-progress[hidden] {
+            display: none
+        }
+
+        .batch-progress {
+            margin-top: 22px;
+            border-top: 1px solid var(--line);
+            padding-top: 16px
+        }
+
+        .batch-progress .summary {
+            font-size: 13px
+        }
+
+        .batch-items {
+            max-height: 240px;
+            overflow-y: auto;
+            display: grid;
+            gap: 8px
+        }
+
+        .batch-item {
+            padding: 10px 12px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: white;
+            font-size: 13px
+        }
+
+        .batch-item.running, .batch-item.waiting_for_user {
+            border-color: var(--teal);
+            background: #edf8f4
+        }
+
+        .batch-item.failed {
+            border-color: #ebc2bc
+        }
+
+        .batch-item-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px
+        }
+
+        .batch-item-url {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--muted);
+            font-size: 12px
+        }
+
+        .batch-item-error {
+            color: #a5322d;
+            overflow-wrap: anywhere
+        }
+
+        .video-links {
+            display: grid;
+            gap: 9px;
+            max-height: 300px;
+            overflow-y: auto;
+            padding: 3px
+        }
+
+        .video-link-row {
+            display: grid;
+            grid-template-columns:minmax(0, 1fr) 46px;
+            gap: 9px;
+            align-items: center
+        }
+
+        .video-link-add {
+            height: 46px;
+            border: 1px solid #b9d2ca;
+            border-radius: 12px;
+            background: #edf8f4;
+            color: var(--teal);
+            font-size: 26px;
+            line-height: 1;
+            transition: background .15s
+        }
+
+        .video-link-add:hover:not(:disabled) {
+            background: #dcefe7
+        }
+
+        .video-link-add:focus-visible {
+            outline: 3px solid #0f766e30;
+            outline-offset: 2px
+        }
+
+        .video-link-add:disabled {
+            opacity: .45;
+            cursor: not-allowed
+        }
+        .video-link-row.removable {grid-template-columns:minmax(0,1fr) 46px 46px}
+        .video-link-remove {background:#fff1ef;border-color:#ebc2bc;color:#a5322d}
+        .video-link-remove:hover:not(:disabled) {background:#fae0dc}
+        .queue-actions{display:flex;align-items:center;gap:10px}
+        .queue-stop{width:32px;height:32px;border-radius:9px}
+        .history-layout .runs{scrollbar-width:thin;scrollbar-color:#88b5a7 #eef2eb;scrollbar-gutter:stable;padding-right:8px}
+        .history-layout .runs::-webkit-scrollbar{width:8px}
+        .history-layout .runs::-webkit-scrollbar-track{background:#eef2eb;border-radius:999px;margin-block:4px}
+        .history-layout .runs::-webkit-scrollbar-thumb{background:#88b5a7;border:2px solid #eef2eb;border-radius:999px;min-height:36px}
+        .history-layout .runs::-webkit-scrollbar-thumb:hover{background:#478b78}
+        .history-layout .runs::-webkit-scrollbar-thumb:active{background:var(--teal)}
+        .history-layout .runs::-webkit-scrollbar-button{display:none}
+</style>
+</head>
+<body>
+<main class="shell">
+    <header class="top">
+        <div>
+            <div class="eyebrow">LOCAL RESEARCH DESK</div>
+            <h1>抖音评论调研工作台</h1>
+        </div>
+    </header>
+    <nav class="tabs">
+        <button class="tab active" data-view="crawl">采集评论</button>
+        <button class="tab" data-view="history">结果与导出</button>
+        <button class="tab" data-view="xpathConfig">高级配置</button>
+    </nav>
+
+    <section id="crawl" class="view active">
+        <div class="grid">
+            <div class="card capture-card">
+                <h2>采集配置</h2>
+                <div class="field"><label for="url">抖音视频链接</label>
+                    <div id="videoLinks" class="video-links"></div>
+                    <small>点击右侧 + 添加链接，最多 100 个；自动去重后按顺序采集，空输入框忽略。</small></div>
+                <div class="row">
+                    <div class="field"><label for="commentScope">评论层级</label><select id="commentScope">
+                        <option value="top_level" selected>仅一级评论（默认）</option>
+                        <option value="all">所有层级评论</option>
+                    </select><small>所有层级将运行至完整加载</small></div>
+                    <div class="field"><label for="fetchMode">一级评论加载方式</label><select id="fetchMode">
+                        <option value="network_first" selected>接口优先（失败自动滚动）</option>
+                        <option value="scroll_only">仅页面滚动</option>
+                    </select><small>接口失败时自动回到页面滚动</small></div>
+                </div>
+                <div class="field"><label for="maxComments">最多评论数</label><input id="maxComments" type="number"
+                                                                                     min="0" value="0"><small>0
+                    表示不限制</small></div>
+                <div class="field"><label for="fetchDouyinId" class="account-toggle"><input id="fetchDouyinId"
+                                                                                            type="checkbox"
+                                                                                            role="switch"
+                                                                                            aria-describedby="douyinIdHelp"><span
+                        class="account-switch" aria-hidden="true"></span>获取抖音号</label><small id="douyinIdHelp">默认关闭。开启后，评论接口缺失的抖音号会通过用户主页接口补充，同一用户只查询一次；额外访问主页可能影响性能、增加采集耗时。</small>
+                </div>
+                <div class="field"><label for="concurrent" class="account-toggle"><input id="concurrent" type="checkbox" role="switch" aria-describedby="concurrentHelp"><span class="account-switch" aria-hidden="true"></span>并发采集</label><small id="concurrentHelp">默认关闭，按顺序采集。开启后最多同时采集 2 个视频，日志按视频标记；请求增加可能更容易触发验证，遇到验证会暂停启动新任务。</small></div>
+                <button id="advancedToggle" class="advanced-toggle" type="button" aria-expanded="false"
+                        aria-controls="advancedSettings"><span>更多设置</span><span
+                        id="advancedToggleLabel">展开　⌄</span></button>
+                <div id="advancedSettings" class="advanced-settings" hidden>
+                    <div class="row">
+                        <div class="field"><label for="maxMinutes">最长运行时间</label><input id="maxMinutes"
+                                                                                              type="number" min="1"
+                                                                                              value="30"><small>单位：分钟</small>
+                        </div>
+                        <div class="field"><label for="direction">加载方向</label><select id="direction">
+                            <option value="down">向下</option>
+                            <option value="up">向上</option>
+                        </select></div>
+                        <div class="field"><label for="minDelay">最短滚动等待</label><input id="minDelay" type="number"
+                                                                                            min="500"
+                                                                                            value="800"><small>单位：毫秒</small>
+                        </div>
+                        <div class="field"><label for="maxDelay">最长滚动等待</label><input id="maxDelay" type="number"
+                                                                                            min="500"
+                                                                                            value="1400"><small>单位：毫秒</small>
+                        </div>
+                        <div class="field"><label for="waitMinutes">登录等待时间</label><input id="waitMinutes"
+                                                                                               type="number" min="1"
+                                                                                               value="30"><small>单位：分钟</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="actions">
+                    <button id="start" class="btn primary">启动采集</button>
+                    <button id="stop" class="btn danger" disabled>停止任务</button>
+                </div>
+                <section id="batchProgress" class="batch-progress" hidden>
+                    <div class="summary"><strong>采集队列</strong><span id="batchSummary"></span></div>
+                    <div id="batchItems" class="batch-items"></div>
+                </section>
+            </div>
+            <div class="card log-card">
+                <div class="statusline"><span id="dot" class="dot"></span><strong id="statusText">等待开始</strong>
+                </div>
+                <div id="waiting" class="waiting"><strong>需要人工操作</strong>
+                    <div>请在程序打开的 Chrome 窗口中完成登录或验证，然后点击继续。</div>
+                    <button id="continue" class="btn primary" style="margin-top:10px">登录完成，继续</button>
+                </div>
+                <div id="log" class="log">暂无运行日志</div>
+            </div>
+        </div>
+    </section>
+
+    <section id="history" class="view">
+        <div class="history-layout">
+            <aside class="card">
+                <div class="summary"><h2>历史任务</h2>
+                    <button id="refresh" class="btn">刷新</button>
+                </div>
+                <div id="runs" class="runs">
+                    <div class="empty">正在读取…</div>
+                </div>
+            </aside>
+            <section class="card">
+                <div class="summary">
+                    <div class="selected-run-heading"><h2 id="runTitle">选择一个结果</h2>
+                        <p id="runMeta">查看评论并下载 Excel</p></div>
+                </div>
+                <div class="toolbar"><input id="search" placeholder="搜索评论、作者或地区"><select id="sort">
+                    <option value="source">原始顺序</option>
+                    <option value="likes">点赞最多</option>
+                    <option value="newest">最新发布</option>
+                </select>
+                    <button id="historyAdvancedToggle" class="history-advanced" type="button" aria-expanded="false"
+                            aria-controls="historyAdvancedPanel"><span id="historyAdvancedLabel">高级筛选</span>
+                    </button>
+                    <button id="clear" class="btn">清空筛选</button>
+                    <label id="historyAdvancedPanel" class="time-filter" hidden
+                           for="commentAfter"><span>评论发表于此时间之后</span><input id="commentAfter"
+                                                                                      type="datetime-local" step="1"
+                                                                                      aria-describedby="commentAfterHelp"><small
+                            id="commentAfterHelp">按本机时区筛选；留空显示全部时间</small></label></div>
+                <div class="comments-scroll">
+                    <div id="comments" class="comments">
+                        <div class="empty">从左侧选择一次采集结果</div>
+                    </div>
+                    <button id="more" class="btn more" hidden>加载更多</button>
+                </div>
+            </section>
+        </div>
+    </section>
+
+    <section id="xpathConfig" class="view">
+        <div class="card" style="max-width:1100px">
+            <h2>页面操作与视频信息 XPath</h2>
+            <p style="margin:-8px 0 20px;color:var(--muted)">采集顺序：打开视频并暂停 → 点击评论图标 → 点击详情 XPath →
+                读取作者昵称和标题 → 点击评论 XPath → 开始采集。XPath 配置保存在本机项目目录中。</p>
+            <div class="field"><label for="pauseXpath">暂停按钮 XPath</label><textarea id="pauseXpath" rows="3"
+                                                                                       placeholder="/html/body/.../暂停按钮"></textarea><small>视频打开、登录或验证完成后，先点击此节点暂停视频。已暂停时不会重复点击；留空则跳过，点击失败会记录日志并继续采集。</small>
+            </div>
+            <div class="field"><label for="detailXpath">详情按钮 XPath</label><textarea id="detailXpath" rows="3"
+                                                                                        placeholder="/html/body/.../详情入口"></textarea><small>评论图标打开后点击此节点，再读取昵称和视频标题。</small>
+            </div>
+            <div class="field"><label for="authorXpath">作者昵称 XPath</label><textarea id="authorXpath" rows="3"
+                                                                                        placeholder="/html/body/.../span"></textarea><small>可定位到作者元素，也可定位到文本或属性节点。</small>
+            </div>
+            <div class="field"><label for="titleXpath">视频标题 XPath</label><textarea id="titleXpath" rows="3"
+                                                                                       placeholder="/html/body/.../h1"></textarea><small>元素节点会读取文本；meta
+                等元素会优先读取 content 属性。</small></div>
+            <div class="field"><label for="commentXpath">评论按钮 XPath</label><textarea id="commentXpath" rows="3"
+                                                                                         placeholder="/html/body/.../评论入口"></textarea><small>读取作者和标题后点击此节点，再开始抓取评论。</small>
+            </div>
+            <div class="actions">
+                <button id="saveXpath" class="btn primary">保存配置</button>
+                <button id="clearXpath" class="btn">清空</button>
+            </div>
+        </div>
+    </section>
+</main>
+<div id="deleteDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle"
+             aria-describedby="dialogDescription">
+        <div class="dialog-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 6h18M8 6V4h8v2m3 0-.8 14H5.8L5 6m4 4v6m6-6v6"/>
+            </svg>
+        </div>
+        <h2 id="dialogTitle">删除这次采集结果？</h2>
+        <p id="dialogDescription">此操作会永久移除该目录里的评论数据、图片和导出文件。</p>
+        <p id="dialogError" class="dialog-error" hidden></p>
+        <div id="dialogRunName" class="dialog-name"></div>
+        <div class="dialog-actions">
+            <button id="cancelDelete" class="btn" type="button">取消</button>
+            <button id="confirmDelete" class="btn danger" type="button">删除结果</button>
+        </div>
+    </section>
+</div>
+<div id="stoppingDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="stoppingTitle">
+        <div class="stopping-header">
+            <div class="dialog-icon" style="background:#fff5d7;color:#987217">⏳</div>
+            <h2 id="stoppingTitle">正在停止任务</h2></div>
+        <p style="margin-top:12px">请稍候，当前采集操作结束后会自动停止并保存已采集数据。</p></section>
+</div>
+<div id="tabSwitchDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="tabSwitchTitle"
+             aria-describedby="tabSwitchMessage"><h2 id="tabSwitchTitle">选项卡切换失败</h2>
+        <p id="tabSwitchMessage"></p>
+        <div class="dialog-actions">
+            <button id="closeTabSwitchDialog" class="btn primary" type="button">知道了</button>
+        </div>
+    </section>
+</div>
+<div id="imagePreview" class="image-preview" role="dialog" aria-modal="true" aria-label="图片预览" aria-hidden="true">
+    <button id="imagePreviewClose" class="image-preview-close" type="button" aria-label="关闭图片预览">×</button>
+    <img id="previewImage" alt="评论图片预览"></div>
+<div id="toastStack" class="toast-stack" aria-label="操作提示"></div>
+<script>
+    const $ = id => document.getElementById(id);
+    let selectedRun = "", selectedRunInfo = null, allComments = [], visibleCount = 40, lastStatus = "";
+    const api = async (url, options = {}) => {
+        const response = await fetch(url, options);
+        let data;
+        try {
+            data = await response.json()
+        } catch {
+            data = null
+        }
+        if (!response.ok) throw new Error(data?.error || `请求失败 (${response.status})`);
+        return data
+    };
+    document.querySelectorAll(".tab").forEach(button => button.onclick = () => {
+        document.querySelectorAll(".tab,.view").forEach(el => el.classList.remove("active"));
+        button.classList.add("active");
+        $(button.dataset.view).classList.add("active");
+        if (button.dataset.view === "history") loadRuns()
+    });
+    const payload = () => ({
+        url: $("url").value.trim(),
+        max_comments: +$("maxComments").value,
+        max_minutes: +$("maxMinutes").value,
+        min_delay_ms: +$("minDelay").value,
+        max_delay_ms: +$("maxDelay").value,
+        scroll_direction: $("direction").value,
+        comment_scope: $("commentScope").value,
+        fetch_mode: $("fetchMode").value,
+        fetch_douyin_id: $("fetchDouyinId").checked,
+        concurrent: $("concurrent").checked,
+        challenge_wait_minutes: +$("waitMinutes").value,
+        idle_rounds: 8,
+        scroll_pixels: 700
+    });
+
+    async function loadXpathSettings() {
+        try {
+            const settings = await api("/api/settings");
+            $("pauseXpath").value = settings.pause_xpath || "";
+            $("detailXpath").value = settings.detail_xpath || "";
+            $("authorXpath").value = settings.author_xpath || "";
+            $("titleXpath").value = settings.title_xpath || "";
+            $("commentXpath").value = settings.comment_xpath || ""
+        } catch (error) {
+            showXpathNotice(error.message, true)
+        }
+    }
+
+    function showXpathNotice(message, error = false) {
+        showNotice(message, error)
+    }
+
+    $("saveXpath").onclick = async () => {
+        try {
+            await api("/api/settings", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({
+                    pause_xpath: $("pauseXpath").value,
+                    detail_xpath: $("detailXpath").value,
+                    author_xpath: $("authorXpath").value,
+                    title_xpath: $("titleXpath").value,
+                    comment_xpath: $("commentXpath").value
+                })
+            });
+            showXpathNotice("XPath 配置已保存，新采集任务将使用此配置")
+        } catch (error) {
+            showXpathNotice(error.message, true)
+        }
+    };
+    $("clearXpath").onclick = () => {
+        $("pauseXpath").value = "";
+        $("detailXpath").value = "";
+        $("authorXpath").value = "";
+        $("titleXpath").value = "";
+        $("commentXpath").value = ""
+    };
+    $("advancedToggle").onclick = () => {
+        const panel = $("advancedSettings"), expanded = panel.hidden;
+        panel.hidden = !expanded;
+        $("advancedToggle").setAttribute("aria-expanded", String(expanded));
+        $("advancedToggleLabel").textContent = expanded ? "收起　⌃" : "展开　⌄"
+    };
+    $("historyAdvancedToggle").onclick = () => {
+        const panel = $("historyAdvancedPanel");
+        panel.hidden = !panel.hidden;
+        $("historyAdvancedToggle").setAttribute("aria-expanded", String(!panel.hidden))
+    };
+    const videoUrls = () => Array.from($("videoLinks").querySelectorAll("input"), input => input.value.trim()).filter(Boolean);
+
+    function addVideoLink(value = "", after = null) {
+        const box = $("videoLinks");
+        if (box.children.length >= 100) {
+            showNotice("最多添加 100 个视频链接", true);
+            return
+        }
+        const row = document.createElement("div"), input = document.createElement("input"),
+            add = document.createElement("button");
+        row.className = "video-link-row";
+        input.type = "url";
+        input.placeholder = "https://www.douyin.com/video/...";
+        input.autocomplete = "off";
+        input.value = value;
+        input.setAttribute("aria-label", "抖音视频链接");
+        if (!box.children.length) input.id = "url";
+        add.type = "button";
+        add.className = "video-link-add";
+        add.textContent = "+";
+        add.setAttribute("aria-label", "新增视频链接");
+        add.title = "新增一行视频链接";
+        add.onclick = () => {
+            const next = addVideoLink("", row);
+            next?.focus()
+        };
+        row.append(input, add);
+        if (box.children.length) {
+            row.classList.add("removable");
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "video-link-add video-link-remove";
+            remove.textContent = "−";
+            remove.setAttribute("aria-label", "删除此视频链接");
+            remove.title = "删除此行视频链接";
+            remove.onclick = () => {
+                const neighbor = row.previousElementSibling || row.nextElementSibling;
+                row.remove();
+                neighbor?.querySelector("input")?.focus();
+            };
+            row.insertBefore(remove, add);
+        }
+        if (after) after.after(row); else box.append(row);
+        return input
+    }
+
+    function setVideoLinks(urls) {
+        $("videoLinks").replaceChildren();
+        (urls.length ? urls : [""]).forEach(url => addVideoLink(url))
+    }
+
+    setVideoLinks([""]);
+    const notifiedBatchTabErrors = new Set();
+
+    function restoreBatch(batch) {
+        renderBatch(batch);
+        if (!batch || !["running", "stopping"].includes(batch.status)) return;
+        setVideoLinks(batch.items.filter(item => item.status !== "succeeded").map(item => item.url));
+        const options = batch.options || {};
+        for (const [key, id] of Object.entries({
+            comment_scope: "commentScope",
+            fetch_mode: "fetchMode",
+            max_comments: "maxComments",
+            max_minutes: "maxMinutes",
+            scroll_direction: "direction",
+            min_delay_ms: "minDelay",
+            max_delay_ms: "maxDelay",
+            challenge_wait_minutes: "waitMinutes"
+        })) {
+            if (options[key] != null) $(id).value = options[key]
+        }
+        $("fetchDouyinId").checked = options.fetch_douyin_id === true;
+        $("concurrent").checked = options.concurrent === true;
+    }
+
+    $("start").onclick = async () => {
+        const button = $("start");
+        button.disabled = true;
+        try {
+            const options = payload(), urls = videoUrls();
+            if (!urls.length) throw new Error("请先填写抖音视频链接");
+            if (urls.length === 1) options.url = urls[0]; else {
+                options.urls = urls;
+                delete options.url
+            }
+            await api("/api/crawl/start", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify(options)
+            });
+            showNotice(options.concurrent ? "任务已启动，最多同时采集 2 个视频" : "任务已启动，视频将按顺序采集")
+        } catch (error) {
+            showNotice(error.message, true);
+            button.disabled = false
+        }
+    };
+
+    function renderBatch(batch) {
+        const items = (batch?.items || []).filter(item => item.status !== "succeeded").map(item => ({...item, batchId: batch.id}));
+        for (const previous of batch?.unfinished_batches || []) {
+            items.push(...previous.items.filter(item => item.status !== "succeeded").map(item => ({...item, batchId: previous.id})));
+        }
+        const visible = items.length > 0;
+        $("batchProgress").hidden = !visible;
+        if (!visible) {
+            $("batchItems").replaceChildren();
+            $("batchSummary").textContent = "";
+            return;
+        }
+        const labels = {
+            pending: "等待",
+            running: "采集中",
+            waiting_for_user: "等待人工处理",
+            stopping: "正在停止",
+            succeeded: "完成",
+            failed: "失败",
+            stopped: "已停止",
+            cancelled: "未启动",
+            interrupted: "已中断"
+        };
+        $("batchSummary").textContent = `未完成 ${items.length} 个`;
+        const box = $("batchItems"), scroll = box.scrollTop;
+        box.replaceChildren();
+        items.forEach((item, index) => {
+            const row = document.createElement("div");
+            row.className = `batch-item ${item.status}`;
+            const head = document.createElement("div");
+            head.className = "batch-item-head";
+            const title = document.createElement("strong"), state = document.createElement("span");
+            title.textContent = `视频 ${index + 1}`;
+            state.textContent = labels[item.status] || item.status;
+            const actions = document.createElement("div"), stop = document.createElement("button");
+            actions.className = "queue-actions";
+            stop.className = "icon-button queue-stop";
+            stop.type = "button";
+            stop.title = item.status === "pending" ? "停止此任务，不再采集" : "停止此视频采集";
+            stop.setAttribute("aria-label", `停止视频 ${index + 1}`);
+            stop.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>';
+            stop.disabled = item.batchId !== batch.id || batch.status !== "running" || !["pending", "running", "waiting_for_user"].includes(item.status);
+            stop.onclick = async () => {
+                stop.disabled = true;
+                try {
+                    await api("/api/crawl/stop-task", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({batch_id:item.batchId,url:item.url})});
+                    showNotice(item.status === "pending" ? "已停止此任务，将跳过该视频" : "正在停止此视频，保存已有数据后继续下一个");
+                } catch (error) {
+                    stop.disabled = false;
+                    showNotice(error.message, true);
+                }
+            };
+            actions.append(state, stop);
+            head.append(title, actions);
+            const url = document.createElement("span");
+            url.className = "batch-item-url";
+            url.textContent = item.url;
+            url.title = item.url;
+            row.append(head, url);
+            if (item.error) {
+                const key = `${item.batchId}:${item.url}`;
+                if (item.error.startsWith("选项卡切换失败") && !notifiedBatchTabErrors.has(key)) {
+                    notifiedBatchTabErrors.add(key);
+                    showTabSwitchDialog(item.error)
+                }
+                const error = document.createElement("div");
+                error.className = "batch-item-error";
+                error.textContent = item.error;
+                row.append(error)
+            }
+            box.append(row)
+        });
+        box.scrollTop = scroll
+    }
+
+    $("stop").onclick = async () => {
+        setStoppingDialog(true);
+        try {
+            await api("/api/crawl/stop", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})
+        } catch (error) {
+            setStoppingDialog(false);
+            showNotice(error.message, true)
+        }
+    };
+    $("continue").onclick = async () => {
+        try {
+            await api("/api/crawl/continue", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: "{}"
+            })
+        } catch (error) {
+            showNotice(error.message, true)
+        }
+    };
+
+    function showNotice(text, error = false) {
+        const stack = $("toastStack"), toast = document.createElement("div");
+        toast.className = "toast" + (error ? " error" : "");
+        toast.setAttribute("role", error ? "alert" : "status");
+        const icon = document.createElement("span"), message = document.createElement("span"),
+            close = document.createElement("button");
+        icon.className = "toast-icon";
+        icon.textContent = error ? "!" : "✓";
+        icon.setAttribute("aria-hidden", "true");
+        message.className = "toast-message";
+        message.textContent = text;
+        close.className = "toast-close";
+        close.type = "button";
+        close.textContent = "×";
+        close.setAttribute("aria-label", "关闭提示");
+        let dismissed = false, timer;
+        const dismiss = () => {
+            if (dismissed) return;
+            dismissed = true;
+            clearTimeout(timer);
+            toast.classList.add("leaving");
+            setTimeout(() => toast.remove(), 220)
+        };
+        close.onclick = dismiss;
+        toast.append(icon, message, close);
+        stack.append(toast);
+        while (stack.children.length > 4) stack.firstElementChild.remove();
+        timer = setTimeout(dismiss, error ? 7000 : 4500);
+    }
+
+    function setStoppingDialog(show) {
+        $("stoppingDialog").classList.toggle("show", show);
+        $("stoppingDialog").setAttribute("aria-hidden", String(!show))
+    }
+
+    function showTabSwitchDialog(message) {
+        $("tabSwitchMessage").textContent = message;
+        $("tabSwitchDialog").classList.add("show");
+        $("tabSwitchDialog").setAttribute("aria-hidden", "false");
+        $("closeTabSwitchDialog").focus()
+    }
+
+    function closeTabSwitchDialog() {
+        $("tabSwitchDialog").classList.remove("show");
+        $("tabSwitchDialog").setAttribute("aria-hidden", "true")
+    }
+
+    $("closeTabSwitchDialog").onclick = closeTabSwitchDialog;
+    let oldLogMarker = null;
+    let hideOldLogs = false;
+    let hideInitialFinishedStatus = false;
+
+    function visibleLogs(logs) {
+        if (!hideOldLogs || !oldLogMarker) return logs;
+        const boundary = logs.lastIndexOf(oldLogMarker);
+        if (boundary >= 0) return logs.slice(boundary + 1);
+        hideOldLogs = false;
+        return logs
+    }
+
+    async function poll() {
+        try {
+            const state = await api("/api/status");
+            renderBatch(state.batch);
+            const finished = ["succeeded", "stopped", "failed"].includes(state.status);
+            if (hideInitialFinishedStatus && finished) {
+                state.status = "idle";
+                state.message = "等待开始"
+            } else if (!finished) hideInitialFinishedStatus = false;
+            if (state.status === "stopping") setStoppingDialog(true); else if (finished || state.status === "idle") setStoppingDialog(false);
+            $("statusText").textContent = state.message;
+            $("dot").className = `dot ${state.status}`;
+            $("waiting").classList.toggle("show", state.status === "waiting_for_user");
+            const active = ["starting", "running", "waiting_for_user", "stopping"].includes(state.status);
+            $("start").disabled = active;
+            $("stop").disabled = !active;
+            $("concurrent").disabled = active;
+            $("videoLinks").querySelectorAll("input,button").forEach(el => el.disabled = active);
+            $("stop").textContent = state.batch?.items?.length > 1 ? "停止整批" : "停止任务";
+            const logs = visibleLogs(state.logs || []);
+            $("log").textContent = logs.length ? logs.join("\n") : "暂无运行日志";
+            $("log").scrollTop = $("log").scrollHeight;
+            if (lastStatus !== state.status && ["succeeded", "stopped"].includes(state.status)) {
+                showNotice(state.message);
+                loadRuns()
+            }
+            if (lastStatus !== state.status && state.status === "failed") {
+                if (state.message.startsWith("选项卡切换失败")) showTabSwitchDialog(state.message); else showNotice(state.message, true)
+            }
+            lastStatus = state.status
+        } catch {
+        }
+        setTimeout(poll, 1200)
+    }
+
+    let deleteTarget = null;
+    const runPublisher = run => run?.video_publisher_nickname || "作者未知";
+    const runVideoTitle = run => run?.video_title || "标题未知";
+
+    async function loadRuns() {
+        try {
+            const runs = await api("/api/runs");
+            const box = $("runs");
+            box.replaceChildren();
+            if (!runs.length) {
+                box.innerHTML = '<div class="empty">还没有采集结果</div>';
+                return
+            }
+            runs.forEach(run => {
+                const button = document.createElement("button");
+                button.className = "run" + (run.name === selectedRun ? " active" : "");
+                const heading = document.createElement("div");
+                heading.className = "run-heading";
+                const label = document.createElement("span");
+                label.className = "run-label";
+                label.textContent = `${runPublisher(run)}-${runVideoTitle(run)}`;
+                heading.append(label);
+                const id = document.createElement("span");
+                id.className = "run-id";
+                id.textContent = run.name;
+                button.append(heading, id);
+                button.onclick = () => selectRun(run);
+                const row = document.createElement("div");
+                row.className = "run-item";
+                const actions = document.createElement("div");
+                actions.className = "run-item-actions";
+                const exportButton = document.createElement("button");
+                exportButton.type = "button";
+                exportButton.className = "icon-button run-export";
+                exportButton.title = "导出此任务 Excel";
+                exportButton.setAttribute("aria-label", `导出 ${runPublisher(run)}-${runVideoTitle(run)}`);
+                exportButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4"/></svg>';
+                exportButton.onclick = () => {
+                    location.href = `/api/runs/${encodeURIComponent(run.name)}/excel`
+                };
+                const deleteButton = document.createElement("button");
+                deleteButton.type = "button";
+                deleteButton.className = "icon-button";
+                deleteButton.title = "删除此任务";
+                deleteButton.setAttribute("aria-label", `删除 ${runPublisher(run)}-${runVideoTitle(run)}`);
+                deleteButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-.8 14H5.8L5 6m4 4v6m6-6v6"/></svg>';
+                deleteButton.onclick = () => openDeleteDialog(run);
+                actions.append(exportButton, deleteButton);
+                row.append(button, actions);
+                box.append(row)
+            })
+        } catch (error) {
+            showNotice(error.message, true)
+        }
+    }
+
+    function openDeleteDialog(run = selectedRunInfo) {
+        const target = run?.name || selectedRun;
+        if (!target) return;
+        deleteTarget = target;
+        const info = run || {};
+        const box = $('dialogRunName'), primary = document.createElement('div'), id = document.createElement('div');
+        primary.className = 'dialog-run-primary';
+        primary.textContent = `${runPublisher(info)}-${runVideoTitle(info)}`;
+        id.className = 'dialog-run-id';
+        id.textContent = target;
+        box.replaceChildren(primary, id);
+        $('dialogError').hidden = true;
+        $('dialogError').textContent = '';
+        $('deleteDialog').classList.add('show');
+        $('deleteDialog').setAttribute('aria-hidden', 'false');
+        $('cancelDelete').focus()
+    }
+
+    function closeDeleteDialog() {
+        $('deleteDialog').classList.remove('show');
+        $('deleteDialog').setAttribute('aria-hidden', 'true');
+        deleteTarget = null;
+        (document.querySelector('.run.active') || $('refresh')).focus()
+    }
+
+    async function deleteRun() {
+        if (!deleteTarget) return;
+        const target = deleteTarget;
+        $('confirmDelete').disabled = true;
+        try {
+            await api("/api/runs/delete", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({name: target})
+            });
+            closeDeleteDialog();
+            if (selectedRun === target) {
+                selectedRun = "";
+                selectedRunInfo = null;
+                allComments = [];
+                $('runTitle').textContent = "选择一个结果";
+                $('runMeta').textContent = "查看评论并下载 Excel";
+                $('comments').innerHTML = '<div class="empty">从左侧选择一次采集结果</div>';
+                $('more').hidden = true;
+            }
+            showNotice(`已删除 ${target}`);
+            await loadRuns()
+        } catch (error) {
+            showNotice(error.message, true)
+        } finally {
+            $('confirmDelete').disabled = false
+        }
+    }
+
+    $('confirmDelete').onclick = deleteRun;
+    $('cancelDelete').onclick = closeDeleteDialog;
+    $('deleteDialog').onclick = event => {
+        if (event.target === $('deleteDialog')) closeDeleteDialog()
+    };
+    document.addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        if ($('imagePreview').classList.contains('show')) closeImagePreview(); else if ($('tabSwitchDialog').classList.contains('show')) closeTabSwitchDialog(); else if ($('deleteDialog').classList.contains('show')) closeDeleteDialog()
+    });
+
+    function openImagePreview(source, alt) {
+        $('previewImage').src = source;
+        $('previewImage').alt = alt || '评论图片预览';
+        $('imagePreview').classList.add('show');
+        $('imagePreview').setAttribute('aria-hidden', 'false');
+        $('imagePreviewClose').focus()
+    }
+
+    function closeImagePreview() {
+        $('imagePreview').classList.remove('show');
+        $('imagePreview').setAttribute('aria-hidden', 'true');
+        $('previewImage').removeAttribute('src')
+    }
+
+    $('imagePreviewClose').onclick = closeImagePreview;
+    $('imagePreview').onclick = event => {
+        if (event.target === $('imagePreview')) closeImagePreview()
+    };
+
+    async function selectRun(run) {
+        selectedRun = run.name;
+        visibleCount = 40;
+        $("runTitle").textContent = run.name;
+        $("runMeta").textContent = `${run.comment_count} 条评论 · ${run.image_count} 张图片`;
+        try {
+            const data = await api(`/api/runs/${encodeURIComponent(run.name)}/comments`);
+            allComments = Array.isArray(data.comments) ? data.comments : [];
+            renderComments();
+            loadRuns()
+        } catch (error) {
+            showNotice(error.message, true)
+        }
+    }
+
+    const loadSelectedRun = selectRun;
+    selectRun = async run => {
+        selectedRunInfo = run;
+        await loadSelectedRun(run);
+        $("runTitle").textContent = `${runPublisher(run)} ${runVideoTitle(run)}`;
+        $("runMeta").textContent = run.name
+    };
+
+    function commentTimestamp(comment) {
+        const seconds = Number(comment.create_time);
+        return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : Date.parse(comment.create_time_iso || "")
+    }
+
+    function formatCommentTime(comment) {
+        const date = new Date(commentTimestamp(comment));
+        if (!Number.isFinite(date.getTime())) return "时间未知";
+        const pad = value => String(value).padStart(2, "0");
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+    }
+
+    function filtered() {
+        const query = $("search").value.trim().toLowerCase();
+        const after = $("commentAfter").value ? new Date($("commentAfter").value).getTime() : NaN;
+        let result = allComments.filter(comment => {
+            const author = comment.author?.nickname || "";
+            const region = comment.ip_label || "";
+            const match = !query || `${comment.text || ""} ${author} ${region}`.toLowerCase().includes(query);
+            const createdAt = commentTimestamp(comment);
+            const timeMatch = !Number.isFinite(after) || (Number.isFinite(createdAt) && createdAt > after);
+            return match && timeMatch
+        });
+        if ($("sort").value === "likes") result.sort((a, b) => (b.likes || 0) - (a.likes || 0));
+        if ($("sort").value === "newest") result.sort((a, b) => (commentTimestamp(b) || 0) - (commentTimestamp(a) || 0));
+        return result
+    }
+
+    function renderComments() {
+        $("historyAdvancedLabel").textContent = $("commentAfter").value ? "高级筛选（时间筛选已启用）" : "高级筛选";
+        const result = filtered(), box = $("comments");
+        box.replaceChildren();
+        if (!result.length) {
+            box.innerHTML = '<div class="empty">没有符合条件的评论</div>';
+            $("more").hidden = true;
+            return
+        }
+        result.slice(0, visibleCount).forEach(comment => {
+            const card = document.createElement("article");
+            card.className = "comment";
+            if ((comment.level || 1) > 1) card.style.marginLeft = `${Math.min(36, ((comment.level || 2) - 1) * 18)}px`;
+            const head = document.createElement("div");
+            head.className = "comment-head";
+            const author = document.createElement("strong");
+            author.textContent = `${(comment.level || 1) > 1 ? `↳ ${comment.level}级回复 · ` : ""}${comment.author?.nickname || "匿名用户"}`;
+            const place = document.createElement("span");
+            place.textContent = [formatCommentTime(comment), comment.ip_label].filter(Boolean).join(" · ");
+            head.append(author, place);
+            const account = document.createElement("div");
+            account.className = "comment-account";
+            account.textContent = `抖音号：${String(comment.author?.unique_id || "").trim() || "未获取"}`;
+            const text = document.createElement("div");
+            text.className = "comment-text";
+            text.textContent = comment.text || "（无文字）";
+            const metrics = document.createElement("div");
+            metrics.className = "metrics";
+            metrics.textContent = `♥ ${comment.likes || 0}　回复 ${comment.reply_count || 0}${comment.parent_comment_id ? `　父评论 ${comment.parent_comment_id}` : ""}`;
+            card.append(head, account, text, metrics);
+            const files = (comment.images || []).filter(image => image.file);
+            if (files.length) {
+                const images = document.createElement("div");
+                images.className = "images";
+                files.forEach(image => {
+                    const img = document.createElement("img");
+                    img.loading = "lazy";
+                    img.alt = "评论图片";
+                    img.src = `/api/runs/${encodeURIComponent(selectedRun)}/files/${encodeURIComponent(image.file)}`;
+                    img.onclick = () => openImagePreview(img.src, img.alt);
+                    images.append(img)
+                });
+                card.append(images)
+            }
+            box.append(card)
+        });
+        $("more").hidden = visibleCount >= result.length;
+        $("more").textContent = `加载更多（还有 ${Math.max(0, result.length - visibleCount)} 条）`
+    }
+
+    ["search", "sort", "commentAfter"].forEach(id => $(id).addEventListener(["search", "commentAfter"].includes(id) ? "input" : "change", () => {
+        visibleCount = 40;
+        renderComments()
+    }));
+    $("clear").onclick = () => {
+        $("search").value = "";
+        $("sort").value = "source";
+        $("commentAfter").value = "";
+        visibleCount = 40;
+        renderComments()
+    };
+    $("more").onclick = () => {
+        visibleCount += 40;
+        renderComments()
+    };
+    $("refresh").onclick = loadRuns;
+
+    async function initializePage() {
+        await loadXpathSettings();
+        let previousLogs = [];
+        try {
+            const state = await api("/api/status");
+            previousLogs = state.logs || [];
+            restoreBatch(state.batch);
+            hideInitialFinishedStatus = ["succeeded", "stopped", "failed"].includes(state.status)
+        } catch {
+        }
+        oldLogMarker = previousLogs.length ? previousLogs[previousLogs.length - 1] : null;
+        try {
+            const initialized = await api("/api/page/initialize", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: "{}"
+            });
+            oldLogMarker = null;
+            hideOldLogs = false;
+            hideInitialFinishedStatus = false;
+            restoreBatch(initialized.batch);
+            const run = initialized.run;
+            if (run?.status === "running") {
+                const settings = run.settings || {};
+                if (!initialized.batch || !["running", "stopping"].includes(initialized.batch.status)) setVideoLinks([run.source_url || ""]);
+                if (settings.comment_scope) $('commentScope').value = settings.comment_scope;
+                if (settings.fetch_mode) $('fetchMode').value = settings.fetch_mode;
+                $('fetchDouyinId').checked = settings.fetch_douyin_id === true;
+                if (settings.scroll_direction) $('direction').value = settings.scroll_direction;
+                if (settings.max_comments != null) $('maxComments').value = settings.max_comments;
+                if (settings.max_minutes != null) $('maxMinutes').value = settings.max_minutes;
+                if (Array.isArray(settings.delay_ms)) {
+                    $('minDelay').value = settings.delay_ms[0];
+                    $('maxDelay').value = settings.delay_ms[1]
+                }
+                if (settings.challenge_wait_minutes != null) $('waitMinutes').value = settings.challenge_wait_minutes;
+            }
+        } catch {
+            try {
+                await api("/api/logs/clear", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: "{}"
+                })
+            } catch {
+            }
+            hideOldLogs = Boolean(oldLogMarker)
+        }
+        $("log").textContent = "暂无运行日志";
+        poll();
+        loadRuns()
+    }
+
+    initializePage();
+</script>
+</body>
+</html>
