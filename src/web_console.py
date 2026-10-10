@@ -28,7 +28,15 @@ try:
 except ImportError:
     from crawler import CrawlerConfig, crawl_douyin_comments
     from export_comments_excel import export_comments_to_excel
-    from output import read_result_json
+from output import read_result_json
+
+
+CAPTURE_DEFAULTS = {
+    "comment_scope": "top_level", "fetch_mode": "network_first",
+    "max_comments": 0, "max_minutes": 30, "scroll_direction": "down",
+    "min_delay_ms": 800, "max_delay_ms": 1400,
+    "challenge_wait_minutes": 30, "fetch_douyin_id": False, "concurrent": False,
+}
 
 
 def load_console_html() -> bytes:
@@ -122,16 +130,24 @@ class ConsoleState:
         self.message = "等待开始"
         self.logs: list[str] = []
         self.run_name: str | None = None
-        self.run_log_path: Path | None = None
         self.summary: dict[str, Any] | None = None
         self.worker: Thread | None = None
         self.stop_event = Event()
         self.task_controls: dict[str, dict[str, Any]] = {}
         self.batch_path = self.project_root / "src" / "config" / "batch_state.json"
+        self.capture_settings_path = self.settings_path.with_name("capture_settings.json")
+        self.capture_settings = dict(CAPTURE_DEFAULTS)
+        try:
+            self.capture_settings = self._validated_capture_settings(
+                json.loads(self.capture_settings_path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError):
+            pass
         self.batch: dict[str, Any] | None = None
         try:
             saved = json.loads(self.batch_path.read_text(encoding="utf-8"))
             if isinstance(saved, dict) and isinstance(saved.get("items"), list):
+                if not self.capture_settings_path.exists() and isinstance(saved.get("options"), dict):
+                    self.capture_settings = self._validated_capture_settings(saved["options"])
                 self.batch = saved
                 if saved.get("status") in {"running", "stopping"}:
                     saved["status"] = "interrupted"
@@ -139,8 +155,51 @@ class ConsoleState:
                         if item["status"] in {"running", "waiting_for_user", "pending"}:
                             item["status"] = "interrupted"
                 self._save_batch_locked()
-        except (OSError, json.JSONDecodeError, KeyError):
+        except (OSError, ValueError, TypeError, KeyError):
             pass
+        if not self.capture_settings_path.exists():
+            self.save_capture_settings(self.capture_settings)
+
+    @staticmethod
+    def _validated_capture_settings(payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("采集配置必须是 JSON 对象")
+        settings = {key: payload.get(key, default) for key, default in CAPTURE_DEFAULTS.items()}
+        for key, choices in {
+            "comment_scope": {"top_level", "all"},
+            "fetch_mode": {"network_first", "scroll_only"},
+            "scroll_direction": {"up", "down"},
+        }.items():
+            if settings[key] not in choices:
+                raise ValueError(f"无效的采集配置：{key}")
+        for key in ("fetch_douyin_id", "concurrent"):
+            if not isinstance(settings[key], bool):
+                raise ValueError(f"{key} 必须为布尔值")
+        for key, minimum in {"max_comments": 0, "max_minutes": 1,
+                             "min_delay_ms": 500, "max_delay_ms": 500,
+                             "challenge_wait_minutes": 1}.items():
+            if type(settings[key]) is not int or settings[key] < minimum:
+                raise ValueError(f"{key} 必须是大于等于 {minimum} 的整数")
+        if settings["max_delay_ms"] < settings["min_delay_ms"]:
+            raise ValueError("最长滚动等待不能小于最短滚动等待")
+        return settings
+
+    def get_capture_settings(self) -> dict[str, Any]:
+        with self.lock:
+            return dict(self.capture_settings)
+
+    def _save_capture_settings_locked(self, settings: dict[str, Any]) -> None:
+        self.capture_settings_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.capture_settings_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(self.capture_settings_path)
+        self.capture_settings = settings
+
+    def save_capture_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        settings = self._validated_capture_settings(payload)
+        with self.lock:
+            self._save_capture_settings_locked(settings)
+        return dict(settings)
 
     def _save_batch_locked(self) -> None:
         if self.batch is None:
@@ -154,13 +213,24 @@ class ConsoleState:
         for key, default in {"idle_rounds": 8, "scroll_pixels": 700}.items():
             if options.get(key) == default:
                 options.pop(key)
-        # Keep the full current batch while running. Once it ends, persist only
-        # unfinished videos; completed results already live in output/.
+        # Keep terminal items in memory for scheduler indices and final totals,
+        # but never persist them as queued work. Results remain in output/.
         saved = json.loads(json.dumps(self.batch))
-        if saved.get("status") not in {"running", "stopping"}:
-            saved["items"] = [item for item in saved.get("items", []) if item.get("status") != "succeeded"]
-            saved["current_index"] = 0
-        previous = saved.get("unfinished_batches", [])
+        saved.pop("options", None)
+        queue_statuses = {"pending", "running", "waiting_for_user", "stopping"}
+        saved["items"] = [item for item in saved.get("items", []) if item.get("status") in queue_statuses]
+        saved["current_index"] = 0
+        previous = []
+        for batch in saved.get("unfinished_batches", []):
+            batch.pop("options", None)
+            batch["items"] = [item for item in batch.get("items", []) if item.get("status") in queue_statuses]
+            batch["current_index"] = 0
+            if batch["items"]:
+                previous.append(batch)
+        if previous:
+            saved["unfinished_batches"] = previous
+        else:
+            saved.pop("unfinished_batches", None)
         if not saved.get("items") and not previous:
             self.batch_path.unlink(missing_ok=True)
             return
@@ -199,27 +269,6 @@ class ConsoleState:
             line = f"[{timestamp}] {message}"
             self.logs.append(line)
             self.logs = self.logs[-500:]
-            if self.run_log_path is not None:
-                try:
-                    with self.run_log_path.open("a", encoding="utf-8") as file:
-                        file.write(line + "\n")
-                except OSError:
-                    pass
-
-    def register_run_directory(self, run_directory: Path) -> None:
-        with self.lock:
-            self.run_name = run_directory.name
-            if self.batch and self.batch.get("status") in {"running", "stopping"}:
-                self.batch["items"][self.batch["current_index"]]["run_name"] = run_directory.name
-                self._save_batch_locked()
-            self.run_log_path = run_directory / "run.log"
-            try:
-                self.run_log_path.write_text(
-                    "\n".join(self.logs) + ("\n" if self.logs else ""),
-                    encoding="utf-8",
-                )
-            except OSError:
-                self.run_log_path = None
 
     def clear_logs(self) -> None:
         with self.lock:
@@ -261,6 +310,15 @@ class ConsoleState:
             return None
 
         candidates: list[Path] = []
+        with self.lock:
+            active_names = [item.get("run_name") for item in (self.batch or {}).get("items", [])
+                            if item["status"] in {"running", "waiting_for_user", "stopping"}]
+        for name in active_names:
+            if name:
+                try:
+                    candidates.append(self.resolve_run(name))
+                except (ValueError, FileNotFoundError):
+                    pass
         if self.run_name:
             try:
                 candidates.append(self.resolve_run(self.run_name))
@@ -322,7 +380,9 @@ class ConsoleState:
             }
 
     def start(self, options: dict[str, Any]) -> None:
+        options = {**self.get_capture_settings(), **options}
         urls = self.video_urls(options)
+        capture_settings = self._validated_capture_settings(options)
         if options.get("comment_scope", "top_level") not in {"top_level", "all"}:
             raise ValueError("评论层级选项无效")
         if options.get("fetch_mode", "network_first") not in {"network_first", "scroll_only"}:
@@ -330,18 +390,19 @@ class ConsoleState:
         with self.lock:
             if self.worker is not None and self.worker.is_alive():
                 raise RuntimeError("已有抓取任务正在运行")
+            self._save_capture_settings_locked(capture_settings)
             self.status = "starting"
             self.message = "正在启动 Chrome"
             self.logs = []
             self.run_name = None
-            self.run_log_path = None
             self.summary = None
             self.stop_event.clear()
             self.task_controls = {url: {"stop": Event(), "continue": Event(), "logs": [], "log_path": None} for url in urls}
             unfinished = []
             if self.batch:
                 unfinished = json.loads(json.dumps(self.batch.get("unfinished_batches", [])))
-                remaining = [item for item in self.batch.get("items", []) if item.get("status") != "succeeded"]
+                remaining = [item for item in self.batch.get("items", [])
+                             if item.get("status") in {"pending", "running", "waiting_for_user", "stopping"}]
                 if remaining:
                     previous = {key: value for key, value in self.batch.items() if key != "unfinished_batches"}
                     previous["items"] = json.loads(json.dumps(remaining))
@@ -590,10 +651,17 @@ class ConsoleState:
             raise FileNotFoundError("结果目录不存在")
         return path
 
+    def _is_run_active_locked(self, name: str) -> bool:
+        return any(
+            item.get("run_name") == name
+            and item.get("status") in {"running", "waiting_for_user", "stopping"}
+            for item in (self.batch or {}).get("items", [])
+        )
+
     def delete_run(self, name: str) -> None:
         with self.lock:
-            if self.worker is not None and self.worker.is_alive():
-                raise RuntimeError("采集任务运行期间不能删除结果目录")
+            if self._is_run_active_locked(name):
+                raise RuntimeError("该任务正在采集或停止中，不能删除")
             if not self.output_root.exists():
                 raise FileNotFoundError("结果目录不存在")
             if (
@@ -613,6 +681,12 @@ class ConsoleState:
         if not self.output_root.exists():
             return []
         runs: list[dict[str, Any]] = []
+        with self.lock:
+            active_names = {
+                item.get("run_name")
+                for item in (self.batch or {}).get("items", [])
+                if item.get("status") in {"running", "waiting_for_user", "stopping"}
+            }
         for directory in sorted(self.output_root.iterdir(), reverse=True):
             json_path = directory / "comments.json"
             if not directory.is_dir() or not json_path.is_file():
@@ -623,6 +697,7 @@ class ConsoleState:
                 runs.append(
                     {
                         "name": directory.name,
+                        "is_active": directory.name in active_names,
                         "video_publisher_nickname": payload.get(
                             "video_publisher_nickname", ""
                         ),
@@ -710,6 +785,9 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/settings":
                 self._json(200, self.server.state.get_xpath_settings())
                 return
+            if path == "/api/capture-settings":
+                self._json(200, self.server.state.get_capture_settings())
+                return
             if path == "/api/runs":
                 self._json(200, self.server.state.list_runs())
                 return
@@ -734,13 +812,17 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
                 self._send_bytes(200, file_path.read_bytes(), media_type)
                 return
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "excel":
-                run = self.server.state.resolve_run(parts[2])
-                filename = excel_download_filename(read_result_json(run))
-                output_path = run / "comments.xlsx"
-                export_comments_to_excel(run / "comments.json", output_path)
+                with self.server.state.lock:
+                    if self.server.state._is_run_active_locked(parts[2]):
+                        raise RuntimeError("该任务正在采集或停止中，不能导出")
+                    run = self.server.state.resolve_run(parts[2])
+                    filename = excel_download_filename(read_result_json(run))
+                    output_path = run / "comments.xlsx"
+                    export_comments_to_excel(run / "comments.json", output_path)
+                    body = output_path.read_bytes()
                 self._send_bytes(
                     200,
-                    output_path.read_bytes(),
+                    body,
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     'attachment; filename="comments.xlsx"; '
                     f"filename*=UTF-8''{quote(filename, safe='')}",
@@ -769,6 +851,10 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/settings":
                 settings = self.server.state.save_xpath_settings(self._read_json())
+                self._json(200, {"ok": True, **settings})
+                return
+            if self.path == "/api/capture-settings":
+                settings = self.server.state.save_capture_settings(self._read_json())
                 self._json(200, {"ok": True, **settings})
                 return
             if self.path == "/api/crawl/continue":

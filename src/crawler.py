@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextvars import copy_context
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,6 +12,7 @@ import re
 
 from playwright.async_api import (
     BrowserContext,
+    Error as PlaywrightError,
     Page,
     Response,
     async_playwright,
@@ -200,6 +202,7 @@ class CommentResponseCollector:
         self.include_all_levels = include_all_levels
         self.pending: set[asyncio.Task[None]] = set()
         self._listener = self._schedule
+        self._log_context = copy_context()
 
     def attach(self) -> None:
         self.page.on("response", self._listener)
@@ -217,7 +220,7 @@ class CommentResponseCollector:
         if self.aweme_id and response_aweme_id and response_aweme_id != self.aweme_id:
             return
 
-        task = asyncio.create_task(self._handle(response, is_reply=is_reply))
+        task = self._log_context.run(asyncio.create_task, self._handle(response, is_reply=is_reply))
         self.pending.add(task)
         task.add_done_callback(self.pending.discard)
 
@@ -1260,10 +1263,19 @@ def _is_target_profile_response(response: Response, sec_uid: str) -> bool:
     )
 
 
+class _ProfilePageFailure(RuntimeError):
+    pass
+
+
+class _ProfileVerificationFailure(RuntimeError):
+    pass
+
+
 async def _read_profile_short_id(
-    page: Page, sec_uid: str, config: CrawlerConfig,
+    page: Page, sec_uid: str, config: CrawlerConfig, *, reload: bool = False,
 ) -> str:
     future = asyncio.get_running_loop().create_future()
+    page_failure = asyncio.get_running_loop().create_future()
     pending: set[asyncio.Task] = set()
 
     async def read_response(response: Response) -> None:
@@ -1289,12 +1301,23 @@ async def _read_profile_short_id(
             pending.add(task)
             task.add_done_callback(pending.discard)
 
-    page.on("response", on_response)
-    try:
+    def on_crash(*_args: Any) -> None:
+        if not page_failure.done():
+            page_failure.set_result("用户主页已崩溃")
+
+    def on_close(*_args: Any) -> None:
+        if not page_failure.done():
+            page_failure.set_result("用户主页已关闭")
+
+    async def query() -> str:
         profile_url = f"https://www.douyin.com/user/{quote(sec_uid, safe='')}"
         try:
-            await page.goto(profile_url, wait_until="domcontentloaded",
-                            timeout=config.navigation_timeout_ms)
+            if reload:
+                await page.reload(wait_until="domcontentloaded",
+                                  timeout=config.navigation_timeout_ms)
+            else:
+                await page.goto(profile_url, wait_until="domcontentloaded",
+                                timeout=config.navigation_timeout_ms)
         except Exception:
             if not future.done():
                 raise
@@ -1303,12 +1326,33 @@ async def _read_profile_short_id(
             if blocker:
                 print("[抖音号] 用户主页需要登录或验证，等待人工处理")
                 await page.bring_to_front()
-                await _wait_for_manual_challenge(page, config, blocker)
+                try:
+                    await _wait_for_manual_challenge(page, config, blocker)
+                except Exception as error:
+                    raise _ProfileVerificationFailure(str(error)) from error
                 await page.goto(profile_url, wait_until="domcontentloaded",
                                 timeout=config.navigation_timeout_ms)
         return await asyncio.wait_for(future, config.navigation_timeout_ms / 1000)
+
+    page.on("response", on_response)
+    page.on("crash", on_crash)
+    page.on("close", on_close)
+    query_task = asyncio.create_task(query())
+    try:
+        # A renderer crash must also interrupt navigation or manual waiting,
+        # not only the final response wait.
+        await asyncio.wait({query_task, page_failure}, return_when=asyncio.FIRST_COMPLETED)
+        if page_failure.done():
+            raise _ProfilePageFailure(page_failure.result())
+        return query_task.result()
     finally:
         page.remove_listener("response", on_response)
+        page.remove_listener("crash", on_crash)
+        page.remove_listener("close", on_close)
+        query_task.cancel()
+        await asyncio.gather(query_task, return_exceptions=True)
+        future.cancel()
+        page_failure.cancel()
         for task in tuple(pending):
             task.cancel()
         if pending:
@@ -1331,6 +1375,39 @@ async def _supplement_douyin_ids(
     success = failed = 0
     last_checkpoint = asyncio.get_running_loop().time()
     last_profile_at = 0.0
+
+    async def close_profile_page() -> None:
+        nonlocal profile_page
+        old_page, profile_page = profile_page, None
+        if old_page is not None:
+            try:
+                await asyncio.wait_for(old_page.close(), timeout=5)
+            except Exception:
+                pass
+
+    async def query_with_recovery(sec_uid: str) -> str:
+        nonlocal profile_page
+        for attempt in range(3):
+            reload = attempt == 1 and profile_page is not None and not profile_page.is_closed()
+            try:
+                if profile_page is None or profile_page.is_closed():
+                    profile_page = await asyncio.wait_for(context.new_page(), timeout=15)
+                    profile_page.set_default_timeout(config.action_timeout_ms)
+                return await _read_profile_short_id(profile_page, sec_uid, config, reload=reload)
+            except (_ProfilePageFailure, PlaywrightError, TimeoutError) as error:
+                if attempt == 2:
+                    await close_profile_page()
+                    raise
+                action = "重新加载主页" if attempt == 0 else "新建主页标签页"
+                print(f"[抖音号][自动恢复] {error}；{action}，重试 {attempt + 1}/2")
+                if attempt == 1:
+                    await close_profile_page()
+                await asyncio.sleep(1 + attempt)
+            except _ProfileVerificationFailure:
+                # Login/risk verification remains manual; never refresh repeatedly.
+                raise
+        raise RuntimeError("主页恢复失败")
+
     try:
         for authors in groups.values():
             if config.stop_requested and config.stop_requested():
@@ -1356,12 +1433,9 @@ async def _supplement_douyin_ids(
                 if config.stop_requested and config.stop_requested():
                     print("[抖音号] 已停止补充，保留已经获取的抖音号")
                     break
-                if profile_page is None:
-                    profile_page = await context.new_page()
-                    profile_page.set_default_timeout(config.action_timeout_ms)
                 last_profile_at = asyncio.get_running_loop().time()
                 print(f"[抖音号][主页查询] {name}；sec_uid={sec_uid}")
-                task = asyncio.create_task(_read_profile_short_id(profile_page, sec_uid, config))
+                task = asyncio.create_task(query_with_recovery(sec_uid))
                 stopped = False
                 try:
                     while not task.done():
@@ -1403,11 +1477,7 @@ async def _supplement_douyin_ids(
                 _checkpoint(run_directory, result, store, state)
                 last_checkpoint = now
     finally:
-        if profile_page is not None:
-            try:
-                await profile_page.close()
-            except Exception:
-                pass
+        await close_profile_page()
         _checkpoint(run_directory, result, store, state)
     print(f"[抖音号] 处理结束：成功 {success} 位，未获取 {failed} 位")
 

@@ -1078,8 +1078,18 @@
         }
 
         .toolbar {
-            grid-template-columns:minmax(140px, 1fr) 130px auto auto;
-            align-items: center
+            grid-template-columns:minmax(160px, 320px) 130px auto auto;
+            align-items: center;
+            justify-content: start
+        }
+
+        .toolbar > #search {
+            max-width: 320px;
+            min-width: 0
+        }
+
+        .toolbar > #sort, .toolbar > .history-advanced {
+            font-size: 15px
         }
 
         .history-advanced {
@@ -1197,9 +1207,15 @@
             color: var(--teal)
         }
 
-        .run-item-actions .run-export:hover {
+        .run-item-actions .run-export:hover:not(:disabled) {
             background: #edf8f4;
             border-color: #9dc3b9
+        }
+        .run-item-actions .icon-button:disabled {
+            opacity: .35;
+            cursor: not-allowed;
+            background: #f0f2ed;
+            border-color: var(--line);
         }
 
         .shell {
@@ -1471,6 +1487,21 @@
         .history-layout .runs::-webkit-scrollbar-thumb:hover{background:#478b78}
         .history-layout .runs::-webkit-scrollbar-thumb:active{background:var(--teal)}
         .history-layout .runs::-webkit-scrollbar-button{display:none}
+        select{padding:11px 36px 11px 12px;text-align:center;background-position:calc(50% + var(--select-text-half,30px) + 4px) center}
+        .toolbar > .history-advanced{justify-content:center;gap:8px}
+        @supports (appearance:base-select){
+            select{justify-content:center;gap:8px;padding:11px 12px}
+            select::picker-icon{margin-left:0;margin-right:0;flex-shrink:0}
+        }
+        #commentScope, #fetchMode{
+            text-align:left;
+            text-align-last:left;
+            justify-content:flex-start;
+            background-position:right 14px center;
+        }
+        #commentScope::picker-icon, #fetchMode::picker-icon{margin-left:auto}
+        .grid > .log-card{min-height:0;max-height:none}
+        .grid > .log-card > .log{height:0;min-height:0;flex:1;overflow-y:auto}
 </style>
 </head>
 <body>
@@ -1687,6 +1718,21 @@
         $(button.dataset.view).classList.add("active");
         if (button.dataset.view === "history") loadRuns()
     });
+    function centerSelectArrows(){
+        if(CSS.supports("appearance","base-select"))return;
+        const canvas=document.createElement("canvas"),context=canvas.getContext("2d");
+        if(!context)return;
+        document.querySelectorAll("select").forEach(select=>{
+            const style=getComputedStyle(select);
+            context.font=style.font || `${style.fontSize} ${style.fontFamily}`;
+            const text=select.selectedOptions[0]?.textContent||"";
+            const width=context.measureText(text.trim()).width;
+            select.style.setProperty("--select-text-half",`${Math.min(width,Math.max(0,select.clientWidth-56))/2}px`);
+        });
+    }
+    document.querySelectorAll("select").forEach(select=>select.addEventListener("change",centerSelectArrows));
+    window.addEventListener("resize",centerSelectArrows);
+    document.fonts?.ready.then(centerSelectArrows);
     const payload = () => ({
         url: $("url").value.trim(),
         max_comments: +$("maxComments").value,
@@ -1702,6 +1748,38 @@
         idle_rounds: 8,
         scroll_pixels: 700
     });
+
+    const captureFields = {
+        comment_scope: "commentScope", fetch_mode: "fetchMode",
+        max_comments: "maxComments", max_minutes: "maxMinutes",
+        scroll_direction: "direction", min_delay_ms: "minDelay",
+        max_delay_ms: "maxDelay", challenge_wait_minutes: "waitMinutes",
+        fetch_douyin_id: "fetchDouyinId", concurrent: "concurrent"
+    };
+
+    async function loadCaptureSettings() {
+        try {
+            const settings = await api("/api/capture-settings");
+            for (const [key, id] of Object.entries(captureFields)) {
+                if (settings[key] == null) continue;
+                if ($(id).type === "checkbox") $(id).checked = settings[key] === true;
+                else $(id).value = settings[key];
+            }
+            centerSelectArrows();
+        } catch (error) {
+            showNotice(`读取采集配置失败：${error.message}`, true);
+        }
+    }
+
+    let captureSaveChain = Promise.resolve();
+    Object.values(captureFields).forEach(id => $(id).addEventListener("change", () => {
+        const options = payload();
+        const settings = Object.fromEntries(Object.keys(captureFields).map(key => [key, options[key]]));
+        captureSaveChain = captureSaveChain.then(() => api("/api/capture-settings", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(settings)
+        })).catch(error => showNotice(`采集配置保存失败：${error.message}`, true));
+    }));
 
     async function loadXpathSettings() {
         try {
@@ -1813,28 +1891,14 @@
     function restoreBatch(batch) {
         renderBatch(batch);
         if (!batch || !["running", "stopping"].includes(batch.status)) return;
-        setVideoLinks(batch.items.filter(item => item.status !== "succeeded").map(item => item.url));
-        const options = batch.options || {};
-        for (const [key, id] of Object.entries({
-            comment_scope: "commentScope",
-            fetch_mode: "fetchMode",
-            max_comments: "maxComments",
-            max_minutes: "maxMinutes",
-            scroll_direction: "direction",
-            min_delay_ms: "minDelay",
-            max_delay_ms: "maxDelay",
-            challenge_wait_minutes: "waitMinutes"
-        })) {
-            if (options[key] != null) $(id).value = options[key]
-        }
-        $("fetchDouyinId").checked = options.fetch_douyin_id === true;
-        $("concurrent").checked = options.concurrent === true;
+        setVideoLinks(batch.items.filter(item => ["pending", "running", "waiting_for_user", "stopping"].includes(item.status)).map(item => item.url));
     }
 
     $("start").onclick = async () => {
         const button = $("start");
         button.disabled = true;
         try {
+            await captureSaveChain;
             const options = payload(), urls = videoUrls();
             if (!urls.length) throw new Error("请先填写抖音视频链接");
             if (urls.length === 1) options.url = urls[0]; else {
@@ -1854,9 +1918,10 @@
     };
 
     function renderBatch(batch) {
-        const items = (batch?.items || []).filter(item => item.status !== "succeeded").map(item => ({...item, batchId: batch.id}));
+        const isQueued = item => ["pending", "running", "waiting_for_user", "stopping"].includes(item.status);
+        const items = (batch?.items || []).filter(isQueued).map(item => ({...item, batchId: batch.id}));
         for (const previous of batch?.unfinished_batches || []) {
-            items.push(...previous.items.filter(item => item.status !== "succeeded").map(item => ({...item, batchId: previous.id})));
+            items.push(...previous.items.filter(isQueued).map(item => ({...item, batchId: previous.id})));
         }
         const visible = items.length > 0;
         $("batchProgress").hidden = !visible;
@@ -2009,10 +2074,22 @@
         return logs
     }
 
+    function renderLogs(logs) {
+        const box = $("log");
+        const text = logs.length ? logs.join("\n") : "暂无运行日志";
+        if (box.textContent === text) return;
+        // Check before adding new lines, so an existing reader position is kept.
+        const followLatest = box.scrollHeight - box.clientHeight - box.scrollTop <= 24;
+        const previousTop = box.scrollTop;
+        box.textContent = text;
+        box.scrollTop = followLatest ? box.scrollHeight : previousTop;
+    }
+
     async function poll() {
         try {
             const state = await api("/api/status");
             renderBatch(state.batch);
+            syncRunActions(state.batch);
             const finished = ["succeeded", "stopped", "failed"].includes(state.status);
             if (hideInitialFinishedStatus && finished) {
                 state.status = "idle";
@@ -2029,8 +2106,7 @@
             $("videoLinks").querySelectorAll("input,button").forEach(el => el.disabled = active);
             $("stop").textContent = state.batch?.items?.length > 1 ? "停止整批" : "停止任务";
             const logs = visibleLogs(state.logs || []);
-            $("log").textContent = logs.length ? logs.join("\n") : "暂无运行日志";
-            $("log").scrollTop = $("log").scrollHeight;
+            renderLogs(logs);
             if (lastStatus !== state.status && ["succeeded", "stopped"].includes(state.status)) {
                 showNotice(state.message);
                 loadRuns()
@@ -2047,6 +2123,16 @@
     let deleteTarget = null;
     const runPublisher = run => run?.video_publisher_nickname || "作者未知";
     const runVideoTitle = run => run?.video_title || "标题未知";
+
+    function syncRunActions(batch) {
+        const activeNames = new Set((batch?.items || [])
+            .filter(item => ["running", "waiting_for_user", "stopping"].includes(item.status))
+            .map(item => item.run_name));
+        document.querySelectorAll(".run-item-actions button").forEach(button => {
+            button.disabled = activeNames.has(button.dataset.runName);
+            button.title = button.disabled ? "任务正在采集或停止中，暂不可操作" : button.dataset.actionTitle;
+        });
+    }
 
     async function loadRuns() {
         try {
@@ -2079,18 +2165,29 @@
                 exportButton.type = "button";
                 exportButton.className = "icon-button run-export";
                 exportButton.title = "导出此任务 Excel";
+                exportButton.dataset.actionTitle = exportButton.title;
+                exportButton.dataset.runName = run.name;
+                exportButton.disabled = Boolean(run.is_active);
+                if (exportButton.disabled) exportButton.title = "任务正在采集或停止中，暂不可导出";
                 exportButton.setAttribute("aria-label", `导出 ${runPublisher(run)}-${runVideoTitle(run)}`);
                 exportButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4"/></svg>';
                 exportButton.onclick = () => {
+                    if (exportButton.disabled) return;
                     location.href = `/api/runs/${encodeURIComponent(run.name)}/excel`
                 };
                 const deleteButton = document.createElement("button");
                 deleteButton.type = "button";
                 deleteButton.className = "icon-button";
                 deleteButton.title = "删除此任务";
+                deleteButton.dataset.actionTitle = deleteButton.title;
+                deleteButton.dataset.runName = run.name;
+                deleteButton.disabled = Boolean(run.is_active);
+                if (deleteButton.disabled) deleteButton.title = "任务正在采集或停止中，暂不可删除";
                 deleteButton.setAttribute("aria-label", `删除 ${runPublisher(run)}-${runVideoTitle(run)}`);
                 deleteButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-.8 14H5.8L5 6m4 4v6m6-6v6"/></svg>';
-                deleteButton.onclick = () => openDeleteDialog(run);
+                deleteButton.onclick = () => {
+                    if (!deleteButton.disabled) openDeleteDialog(run);
+                };
                 actions.append(exportButton, deleteButton);
                 row.append(button, actions);
                 box.append(row)
@@ -2303,6 +2400,7 @@
 
     async function initializePage() {
         await loadXpathSettings();
+        await loadCaptureSettings();
         let previousLogs = [];
         try {
             const state = await api("/api/status");
@@ -2324,19 +2422,7 @@
             restoreBatch(initialized.batch);
             const run = initialized.run;
             if (run?.status === "running") {
-                const settings = run.settings || {};
                 if (!initialized.batch || !["running", "stopping"].includes(initialized.batch.status)) setVideoLinks([run.source_url || ""]);
-                if (settings.comment_scope) $('commentScope').value = settings.comment_scope;
-                if (settings.fetch_mode) $('fetchMode').value = settings.fetch_mode;
-                $('fetchDouyinId').checked = settings.fetch_douyin_id === true;
-                if (settings.scroll_direction) $('direction').value = settings.scroll_direction;
-                if (settings.max_comments != null) $('maxComments').value = settings.max_comments;
-                if (settings.max_minutes != null) $('maxMinutes').value = settings.max_minutes;
-                if (Array.isArray(settings.delay_ms)) {
-                    $('minDelay').value = settings.delay_ms[0];
-                    $('maxDelay').value = settings.delay_ms[1]
-                }
-                if (settings.challenge_wait_minutes != null) $('waitMinutes').value = settings.challenge_wait_minutes;
             }
         } catch {
             try {
@@ -2350,10 +2436,17 @@
             hideOldLogs = Boolean(oldLogMarker)
         }
         $("log").textContent = "暂无运行日志";
+        centerSelectArrows();
         poll();
         loadRuns()
     }
 
+    const captureCard=document.querySelector(".capture-card"),logCard=document.querySelector(".log-card");
+    function syncLogHeight(){const height=captureCard.getBoundingClientRect().height;if(height>0)logCard.style.height=`${height}px`}
+    const captureSizeObserver=new ResizeObserver(syncLogHeight);
+    captureSizeObserver.observe(captureCard);
+    window.addEventListener("resize",syncLogHeight);
+    syncLogHeight();
     initializePage();
 </script>
 </body>

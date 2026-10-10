@@ -1,0 +1,12 @@
+{
+  "comment_scope": "top_level",
+  "fetch_mode": "network_first",
+  "max_comments": 0,
+  "max_minutes": 30,
+  "scroll_direction": "down",
+  "min_delay_ms": 800,
+  "max_delay_ms": 1400,
+  "challenge_wait_minutes": 30,
+  "fetch_douyin_id": false,
+  "concurrent": false
+}
