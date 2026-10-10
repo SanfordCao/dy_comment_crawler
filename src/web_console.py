@@ -8,8 +8,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import TextIOBase
 from pathlib import Path
 from threading import Event, Lock, Thread
+from tempfile import TemporaryDirectory
 from typing import Any, Callable
-from playwright.async_api import async_playwright
 from urllib.parse import quote, unquote, urlparse, parse_qs
 from uuid import uuid4
 import asyncio
@@ -23,11 +23,17 @@ import webbrowser
 
 try:
     from .crawler import CrawlerConfig, crawl_douyin_comments
-    from .export_comments_excel import export_comments_to_excel
+    from .browser_session import BrowserSession
+    from .private_chat import open_user_chat, send_user_message, validated_message, validated_sec_uid
+    from .private_chat_batch import PrivateChatBatch
+    from .export_comments_excel import export_comments_to_excel, export_comment_rows
     from .output import read_result_json
 except ImportError:
     from crawler import CrawlerConfig, crawl_douyin_comments
-    from export_comments_excel import export_comments_to_excel
+    from browser_session import BrowserSession
+    from private_chat import open_user_chat, send_user_message, validated_message, validated_sec_uid
+    from private_chat_batch import PrivateChatBatch
+    from export_comments_excel import export_comments_to_excel, export_comment_rows
 from output import read_result_json
 
 
@@ -36,6 +42,7 @@ CAPTURE_DEFAULTS = {
     "max_comments": 0, "max_minutes": 30, "scroll_direction": "down",
     "min_delay_ms": 800, "max_delay_ms": 1400,
     "challenge_wait_minutes": 30, "fetch_douyin_id": False, "concurrent": False,
+    "concurrency_limit": 2,
 }
 
 
@@ -92,6 +99,10 @@ class ConsoleState:
         self.project_root = project_root.resolve()
         self.output_root = self.project_root / "output"
         self.profile_dir = self.project_root / ".douyin-browser-profile"
+        self.browser_session = BrowserSession(self.profile_dir)
+        self.chat_lock = Lock()
+        self.private_chat_session: dict[str, Any] | None = None
+        self.private_chat_batch = PrivateChatBatch(self.browser_session, self.chat_lock)
         self.settings_path = self.project_root / "src" / "config" / "web_console_settings.json"
         legacy_settings_path = self.project_root / "web_console_settings.json"
         self.xpath_settings = {
@@ -159,6 +170,108 @@ class ConsoleState:
             pass
         if not self.capture_settings_path.exists():
             self.save_capture_settings(self.capture_settings)
+        self.capture_presets_path = self.settings_path.with_name("capture_presets.json")
+        self.capture_presets: dict[str, dict[str, Any]] = {}
+        self.selected_capture_preset = ""
+        self.default_capture_preset_enabled = True
+        try:
+            saved_presets = json.loads(self.capture_presets_path.read_text(encoding="utf-8"))
+            # 逐套校验，某一套配置损坏不会影响其他有效方案。
+            for entry in saved_presets.get("presets", []):
+                try:
+                    name = self._validated_preset_name(entry.get("name"))
+                    self.capture_presets[name] = self._validated_capture_settings(entry.get("settings"))
+                except (ValueError, TypeError, AttributeError):
+                    continue
+            selected = saved_presets.get("selected", "")
+            if selected in self.capture_presets:
+                self.selected_capture_preset = selected
+                self.default_capture_preset_enabled = saved_presets.get("default_enabled", True) is not False
+            # 当前方案缺失时保留默认方案，避免损坏配置导致没有可用方案。
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+
+    @staticmethod
+    def _validated_preset_name(value: Any) -> str:
+        """校验命名方案名称，返回去空白名称；默认方案使用独立空名称标识。"""
+        if not isinstance(value, str) or not value.strip() or len(value.strip()) > 50:
+            raise ValueError("配置名称需为 1–50 个字符")
+        return value.strip()
+
+    def _capture_presets_locked(self) -> dict[str, Any]:
+        """返回方案列表、当前标记和系统默认参数副本，供页面安全创建草稿。"""
+        # 返回独立副本，避免页面请求修改内部配置引用。
+        return {"selected": self.selected_capture_preset, "default_enabled": self.default_capture_preset_enabled,
+                "defaults": dict(CAPTURE_DEFAULTS),
+                "presets": [{"name": name, "settings": dict(settings)}
+                            for name, settings in self.capture_presets.items()]}
+
+    def get_capture_presets(self) -> dict[str, Any]:
+        """在锁内读取配置列表，包含默认方案是否仍存在。"""
+        with self.lock:
+            return self._capture_presets_locked()
+
+    def manage_capture_preset(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """处理方案操作，返回方案列表及当前使用参数；编辑其他方案不会切换当前配置。"""
+        action = payload.get("action")
+        if action not in {"create", "update", "select", "delete", "custom"}:
+            raise ValueError("无效的配置方案操作")
+        name = ("" if action == "custom" or (action == "delete" and payload.get("name") == "")
+                else self._validated_preset_name(payload.get("name")))
+        # 自定义草稿在修改方案标记前校验，非法输入不能导致当前方案被清空。
+        custom_settings = (self._validated_capture_settings(payload["settings"])
+                           if action == "custom" and payload.get("settings") is not None else None)
+        with self.lock:
+            if self.worker is not None and self.worker.is_alive():
+                raise RuntimeError("采集运行期间不能切换或管理配置方案")
+            # 先构造新副本，再写文件；保存失败时不改内存中的方案。
+            presets = {key: dict(value) for key, value in self.capture_presets.items()}
+            selected = self.selected_capture_preset
+            default_enabled = self.default_capture_preset_enabled
+            # 后端同样约束删除，避免绕过页面按钮误删当前使用方案。
+            if action == "delete":
+                if name == selected:
+                    raise ValueError("当前使用的配置不能删除，请先应用其他方案")
+                if len(presets) + int(default_enabled) <= 1:
+                    raise ValueError("至少需要保留一个配置方案")
+            if action == "custom":
+                if not default_enabled:
+                    raise ValueError("默认配置已删除，请刷新后选择其他方案")
+                # 切回自定义只解除方案关联，保留当前参数及所有命名方案。
+                selected = ""
+            elif action == "create":
+                if name in presets:
+                    raise ValueError("同名配置已存在，请更换名称或更新当前方案")
+                presets[name] = self._validated_capture_settings(payload.get("settings"))
+                # 新建仅保存；用户之后点击“应用”才切换实际采集配置。
+            elif action == "delete" and name == "":
+                if not default_enabled:
+                    raise ValueError("默认配置已删除，请刷新后重试")
+                default_enabled = False
+            else:
+                if name not in presets:
+                    raise ValueError("配置方案不存在，请刷新后重试")
+                if action == "update":
+                    presets[name] = self._validated_capture_settings(payload.get("settings"))
+                elif action == "select":
+                    selected = name
+                else:
+                    del presets[name]
+            document = {"selected": selected, "default_enabled": default_enabled,
+                        "presets": [{"name": key, "settings": value} for key, value in presets.items()]}
+            self.capture_presets_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.capture_presets_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            temporary.replace(self.capture_presets_path)
+            self.capture_presets, self.selected_capture_preset = presets, selected
+            self.default_capture_preset_enabled = default_enabled
+            # 只有明确使用方案或更新正在使用的方案，才改实际采集参数。
+            # 查看/编辑其他方案不应悄悄改变下一次采集的配置。
+            if custom_settings is not None:
+                self._save_capture_settings_locked(custom_settings)
+            elif action == "select" or (action == "update" and selected == name):
+                self._save_capture_settings_locked(dict(presets[name]))
+            return {**self._capture_presets_locked(), "settings": dict(self.capture_settings)}
 
     @staticmethod
     def _validated_capture_settings(payload: dict[str, Any]) -> dict[str, Any]:
@@ -177,9 +290,12 @@ class ConsoleState:
                 raise ValueError(f"{key} 必须为布尔值")
         for key, minimum in {"max_comments": 0, "max_minutes": 1,
                              "min_delay_ms": 500, "max_delay_ms": 500,
-                             "challenge_wait_minutes": 1}.items():
+                             "challenge_wait_minutes": 1, "concurrency_limit": 1}.items():
             if type(settings[key]) is not int or settings[key] < minimum:
                 raise ValueError(f"{key} 必须是大于等于 {minimum} 的整数")
+        # 队列最多允许 100 个视频，并发数量使用同一上限，避免误填超大值。
+        if settings["concurrency_limit"] > 100:
+            raise ValueError("并发数量不能超过 100")
         if settings["max_delay_ms"] < settings["min_delay_ms"]:
             raise ValueError("最长滚动等待不能小于最短滚动等待")
         return settings
@@ -295,6 +411,7 @@ class ConsoleState:
             return dict(settings)
 
     def initialize_page(self) -> dict[str, Any] | None:
+        """初始化页面显示，空闲时清理显示缓存；运行中的每任务日志仍保留。"""
         with self.lock:
             active = bool(self.batch and self.batch.get("status") in {"running", "stopping"}) or self.status in {
                 "starting",
@@ -303,6 +420,10 @@ class ConsoleState:
                 "stopping",
             }
             self.logs.clear()
+            if not active:
+                # 只清显示缓存，不修改任务文件中的完整日志。
+                for control in self.task_controls.values():
+                    control["logs"].clear()
             if not active and self.status in {"succeeded", "stopped", "failed"}:
                 self.status = "idle"
                 self.message = "等待开始"
@@ -363,6 +484,7 @@ class ConsoleState:
         return None
 
     def snapshot(self) -> dict[str, Any]:
+        """返回批次状态及独立任务日志副本，防止页面混合并发任务输出。"""
         with self.lock:
             status, message = self.status, self.message
             if self.batch and self.batch.get("status") in {"running", "stopping"}:
@@ -370,12 +492,21 @@ class ConsoleState:
                     status, message = "stopping", "正在停止整批任务"
                 elif status in {"succeeded", "failed", "stopped"}:
                     status, message = "running", "准备采集下一个视频"
+            task_logs = []
+            for index, item in enumerate((self.batch or {}).get("items", [])):
+                logs = self.task_controls.get(item["url"], {}).get("logs", [])
+                if logs or (self.batch or {}).get("status") in {"running", "stopping"}:
+                    task_logs.append({"key": f'{self.batch["id"]}:{item["url"]}',
+                                      "index": index + 1, "url": item["url"],
+                                      "status": item["status"], "run_name": item.get("run_name"),
+                                      "logs": list(logs)})
             return {
                 "status": status,
                 "message": message,
                 "logs": list(self.logs),
                 "run_name": self.run_name,
                 "summary": self.summary,
+                "task_logs": task_logs,
                 "batch": json.loads(json.dumps(self.batch)) if self.batch else None,
             }
 
@@ -535,51 +666,51 @@ class ConsoleState:
                 self._save_batch_locked()
 
     async def _run_batch_async(self, options: dict[str, Any]) -> None:
-        limit = 2 if options.get("concurrent") is True else 1
+        """在共享浏览器事件循环派发任务，结束仅关闭任务页，保留登录与私聊页。"""
+        # 关闭开关时始终串行；开启后按本批次启动时的配置派发任务。
+        limit = int(options.get("concurrency_limit", 2)) if options.get("concurrent") is True else 1
         first_login = [not self.profile_dir.exists() or not any(self.profile_dir.iterdir())]
         self.profile_dir.mkdir(parents=True, exist_ok=True)
-        async with async_playwright() as playwright:
-            context = await playwright.chromium.launch_persistent_context(
-                user_data_dir=str(self.profile_dir), channel="chrome", headless=False)
-            running: set[asyncio.Task] = set()
-            pending = list(range(len(self.batch["items"])))
-            try:
-                while pending or running:
-                    with self.lock:
-                        waiting = any(i["status"] == "waiting_for_user" for i in self.batch["items"])
-                        while (pending and len(running) < limit and not self.stop_event.is_set()
-                               and not waiting and not (first_login[0] and running)):
-                            index = pending.pop(0)
-                            item = self.batch["items"][index]
-                            if item["status"] != "pending":
-                                continue
-                            self.batch["current_index"] = index
-                            item["status"] = "running"
-                            running.add(asyncio.create_task(self._run_video(index, options, context, first_login)))
-                            self._refresh_running_status_locked()
-                            self._save_batch_locked()
-                    if not running:
-                        break
-                    done, _ = await asyncio.wait(running, timeout=.15, return_when=asyncio.FIRST_COMPLETED)
-                    for task in done:
-                        task.result()
-                    running.difference_update(done)
-                    # Conservative spacing between dispatch rounds; never blocks UI requests.
-                    if done and pending:
-                        await asyncio.sleep(1)
-            finally:
-                if running:
-                    self.stop_event.set()
-                    for control in self.task_controls.values():
-                        control["continue"].set()
-                    await asyncio.gather(*running, return_exceptions=True)
-                await context.close()
+        context = await self.browser_session.get_context()
+        running: set[asyncio.Task] = set()
+        pending = list(range(len(self.batch["items"])))
+        try:
+            while pending or running:
+                with self.lock:
+                    waiting = any(i["status"] == "waiting_for_user" for i in self.batch["items"])
+                    while (pending and len(running) < limit and not self.stop_event.is_set()
+                           and not waiting and not (first_login[0] and running)):
+                        index = pending.pop(0)
+                        item = self.batch["items"][index]
+                        if item["status"] != "pending":
+                            continue
+                        self.batch["current_index"] = index
+                        item["status"] = "running"
+                        running.add(asyncio.create_task(self._run_video(index, options, context, first_login)))
+                        self._refresh_running_status_locked()
+                        self._save_batch_locked()
+                if not running:
+                    break
+                done, _ = await asyncio.wait(running, timeout=.15, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    task.result()
+                running.difference_update(done)
+                if done and pending:
+                    await asyncio.sleep(1)
+        finally:
+            if running:
+                self.stop_event.set()
+                for control in self.task_controls.values():
+                    control["continue"].set()
+                await asyncio.gather(*running, return_exceptions=True)
 
     def _run_queue(self, options: dict[str, Any], urls: list[str]) -> None:
+        """工作线程等待共享浏览器中的批次，保持原有日志路由和任务终态处理。"""
         try:
-            self.log("并发采集已开启（最多 2 个视频）" if options.get("concurrent") is True else "按顺序采集视频")
+            self.log(f"并发采集已开启（最多 {options.get('concurrency_limit', 2)} 个视频）"
+                     if options.get("concurrent") is True else "按顺序采集视频")
             with redirect_stdout(_TaskStdout(sys.stdout)):
-                asyncio.run(self._run_batch_async(options))
+                self.browser_session.run(self._run_batch_async(options))
         except Exception as error:
             self.log(f"批次异常：{error}")
             with self.lock:
@@ -677,6 +808,102 @@ class ConsoleState:
                 raise ValueError("该目录不是有效的采集结果目录")
             shutil.rmtree(path)
 
+    def open_private_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """从保存的评论读取目标身份，串行打开私信并生成一次性发送凭据。"""
+        if not self.chat_lock.acquire(blocking=False):
+            raise RuntimeError("正在打开另一位用户的私信，请稍后再试")
+        try:
+            # 打开新目标立即使旧凭据失效，避免旧弹窗向之前的收件人发送。
+            self.private_chat_session = None
+            with self.lock:
+                result = read_result_json(self.resolve_run(str(payload.get("run_name", ""))))
+                comment_id = str(payload.get("comment_id", ""))
+                comment = next((item for item in result.get("comments", []) if str(item.get("id", "")) == comment_id), None)
+                if not comment_id or not comment:
+                    raise ValueError("评论不存在，请刷新结果后再试")
+                author = dict(comment.get("author") or {})
+                validated_sec_uid(author.get("sec_uid"))
+            return self.browser_session.run(self._open_private_chat_async(author), timeout=65)
+        finally:
+            self.chat_lock.release()
+
+    async def _open_private_chat_async(self, author: dict[str, Any]) -> dict[str, Any]:
+        """在采集同一浏览器上下文创建独立标签页，整个打开过程最多 60 秒。"""
+        context = await self.browser_session.get_context()
+
+        def remember_chat(page: Any, sec_uid: str) -> None:
+            """只在浏览器已核对会话 sec_uid 后保存页面，不接受客户端提供的收件人。"""
+            self.private_chat_session = {"page": page, "sec_uid": sec_uid,
+                                         "token": uuid4().hex, "used": False}
+
+        try:
+            result = await asyncio.wait_for(open_user_chat(context, author, remember_chat), timeout=60)
+            if self.private_chat_session:
+                result["chat_token"] = self.private_chat_session["token"]
+            return result
+        except TimeoutError as error:
+            raise RuntimeError("私信界面加载超时，请在浏览器中检查；不会自动重试或发送") from error
+
+    def send_private_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """消费一次性会话凭据并发送一条文本，重复请求及并发请求不会再次点击发送。"""
+        message = validated_message(payload.get("message"))
+        if not self.chat_lock.acquire(blocking=False):
+            raise RuntimeError("正在处理另一项私信操作，请稍后再试")
+        try:
+            session = self.private_chat_session
+            if not session or not isinstance(payload.get("chat_token"), str) or payload["chat_token"] != session["token"]:
+                raise RuntimeError("私信会话已失效，请先打开目标用户的私信")
+            if session["used"]:
+                raise RuntimeError("该发送请求已处理，不能重复发送；请到抖音核对结果")
+            # 在排入浏览器循环前消费凭据，HTTP 超时或重复点击也不会补发。
+            session["used"] = True
+            try:
+                return self.browser_session.run(send_user_message(session["page"], session["sec_uid"], message), timeout=35)
+            except RuntimeError:
+                raise
+            except Exception as error:
+                raise RuntimeError("发送操作异常，结果可能不确定，请在抖音核对；不会自动重试") from error
+        finally:
+            self.chat_lock.release()
+
+    def start_private_chat_batch(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """从勾选的保存评论提取作者，不接受客户端伪造的 sec_uid 或昵称。"""
+        ids = payload.get("comment_ids")
+        if not isinstance(ids, list) or not ids or any(not isinstance(value, str) or not value for value in ids):
+            raise ValueError("请选择有效评论中的用户")
+        with self.lock:
+            result = read_result_json(self.resolve_run(str(payload.get("run_name", ""))))
+            comments = {str(item.get("id", "")): item for item in result.get("comments", [])}
+            if any(value not in comments for value in ids):
+                raise ValueError("部分评论不存在，请刷新结果并重新选择")
+            authors = [dict(comments[value].get("author") or {}) for value in dict.fromkeys(ids)]
+        result = self.private_chat_batch.start(authors, payload.get("message"), payload.get("request_id"))
+        # 批量拥有串行锁时使之前的单条发送凭据失效，结束后不能误用旧会话。
+        self.private_chat_session = None
+        return result
+
+    def export_merged_runs(self, names: Any) -> bytes:
+        """合并所选任务评论为一个 Excel；锁内校验活动状态，临时文件自动清理。"""
+        if not isinstance(names, list) or not names or len(names) > 1000 or any(not isinstance(name, str) for name in names):
+            raise ValueError("请选择 1 至 1000 个有效任务")
+        with self.lock:
+            runs = []
+            for name in dict.fromkeys(names):
+                if self._is_run_active_locked(name):
+                    raise RuntimeError("所选任务正在采集或停止中，不能导出")
+                runs.append((name, read_result_json(self.resolve_run(name))))
+            comments = []
+            for name, result in runs:
+                comments.extend({**comment, "_run_id": name,
+                                 "_video_author": result.get("video_publisher_nickname") or "作者未知",
+                                 "_video_title": result.get("video_title") or "标题未知"}
+                                for comment in result.get("comments", []) if isinstance(comment, dict))
+            # 不在采集目录中留下合并中间文件，不修改原始评论。
+            with TemporaryDirectory(prefix="douyin-export-") as directory:
+                path = Path(directory) / "merged.xlsx"
+                export_comment_rows(comments, path, include_source=True)
+                return path.read_bytes()
+
     def list_runs(self) -> list[dict[str, Any]]:
         if not self.output_root.exists():
             return []
@@ -763,6 +990,9 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         try:
+            if path == "/api/private-chat/batch":
+                self._json(200, self.server.state.private_chat_batch.snapshot())
+                return
             if path in {"/", "/index.html"}:
                 body = load_console_html()
                 self.send_response(200)
@@ -787,6 +1017,9 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/capture-settings":
                 self._json(200, self.server.state.get_capture_settings())
+                return
+            if path == "/api/capture-presets":
+                self._json(200, self.server.state.get_capture_presets())
                 return
             if path == "/api/runs":
                 self._json(200, self.server.state.list_runs())
@@ -834,6 +1067,35 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            if self.path in {"/api/private-chat/batch/start", "/api/private-chat/batch/stop"}:
+                origin = self.headers.get("Origin")
+                if origin and (urlparse(origin).scheme not in {"http", "https"}
+                               or urlparse(origin).netloc != self.headers.get("Host")):
+                    raise ValueError("不允许跨站操作批量私信")
+                payload = self._read_json()
+                if self.path.endswith("/start"):
+                    self._json(202, self.server.state.start_private_chat_batch(payload))
+                else:
+                    self.server.state.private_chat_batch.stop(str(payload.get("job_id", "")))
+                    self._json(200, self.server.state.private_chat_batch.snapshot())
+                return
+            if self.path == "/api/private-chat/open":
+                self._json(200, {"ok": True, **self.server.state.open_private_chat(self._read_json())})
+                return
+            if self.path == "/api/private-chat/send":
+                # 浏览器跨站请求不能使用本机发送接口；只允许控制台同源调用。
+                origin = self.headers.get("Origin")
+                if origin and (urlparse(origin).scheme not in {"http", "https"}
+                               or urlparse(origin).netloc != self.headers.get("Host")):
+                    raise ValueError("不允许跨站发送私信")
+                self._json(200, {"ok": True, **self.server.state.send_private_chat(self._read_json())})
+                return
+            if self.path == "/api/runs/export-merged":
+                body = self.server.state.export_merged_runs(self._read_json().get("names"))
+                filename = f"评论合并导出-{datetime.now().strftime('%Y%m%d-%H%M%S')}.xlsx"
+                self._send_bytes(200, body, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                 'attachment; filename="merged.xlsx"; ' + f"filename*=UTF-8''{quote(filename, safe='')}")
+                return
             if self.path == "/api/crawl/start":
                 options = self._read_json()
                 if options.get("comment_scope", "top_level") not in {
@@ -856,6 +1118,10 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
             if self.path == "/api/capture-settings":
                 settings = self.server.state.save_capture_settings(self._read_json())
                 self._json(200, {"ok": True, **settings})
+                return
+            if self.path == "/api/capture-presets":
+                result = self.server.state.manage_capture_preset(self._read_json())
+                self._json(200, {"ok": True, **result})
                 return
             if self.path == "/api/crawl/continue":
                 self.server.state.continue_after_login()
@@ -912,6 +1178,7 @@ def build_parser() -> ArgumentParser:
 
 
 def main() -> None:
+    """启动本机控制台，退出时停止采集并清理共享浏览器资源。"""
     args = build_parser().parse_args()
     server = create_console_server(args.host, args.port)
     url = f"http://{args.host}:{server.server_address[1]}/"
@@ -923,7 +1190,16 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        server.state.stop()
+        server.state.private_chat_batch.stop()
+        if server.state.private_chat_batch.worker is not None:
+            server.state.private_chat_batch.worker.join(timeout=5)
+        if server.state.worker is not None:
+            server.state.worker.join(timeout=5)
+        try:
+            server.state.browser_session.close()
+        finally:
+            server.server_close()
 
 
 if __name__ == "__main__":

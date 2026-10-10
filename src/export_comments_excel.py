@@ -62,7 +62,13 @@ def _comment_row(index: int, comment: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def export_comments_to_excel(json_path: Path, output_path: Path) -> int:
-    """Write comments from *json_path* into an .xlsx file and return row count."""
+    """读取单任务评论 JSON，导出 Excel 并返回评论条数。"""
+    return export_comment_rows(_comments_from_json(json_path), output_path)
+
+
+def export_comment_rows(comments: list[dict[str, Any]], output_path: Path,
+                        include_source: bool = False) -> int:
+    """导出评论列表；合并模式增加任务 ID、视频作者和标题用于追溯来源。"""
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Font, PatternFill
@@ -72,12 +78,11 @@ def export_comments_to_excel(json_path: Path, output_path: Path) -> int:
             "缺少 openpyxl。请在项目根目录执行：python -m pip install -e ."
         ) from error
 
-    comments = _comments_from_json(json_path)
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "评论"
     sheet.freeze_panes = "A2"
-    sheet.append(HEADERS)
+    sheet.append(HEADERS + (("任务 ID", "视频作者", "视频标题") if include_source else ()))
 
     header_fill = PatternFill("solid", fgColor="0F766E")
     for cell in sheet[1]:
@@ -86,7 +91,10 @@ def export_comments_to_excel(json_path: Path, output_path: Path) -> int:
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
     for index, comment in enumerate(comments, start=1):
-        sheet.append(_comment_row(index, comment))
+        values = _comment_row(index, comment)
+        if include_source:
+            values += tuple(str(comment.get(key) or "") for key in ("_run_id", "_video_author", "_video_title"))
+        sheet.append(values)
 
     for row in sheet.iter_rows(min_row=2):
         row[2].alignment = Alignment(wrap_text=True, vertical="top")
@@ -94,16 +102,26 @@ def export_comments_to_excel(json_path: Path, output_path: Path) -> int:
         row[4].number_format = "@"
         row[4].data_type = "s"
         for cell in row:
+            # 评论、昵称和标题均为外部文本，避免以等号开头时被当作 Excel 公式执行。
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
             if cell.column != 3:
                 cell.alignment = Alignment(vertical="top")
 
     widths = {"A": 8, "B": 8, "C": 60, "D": 20, "E": 24, "F": 12, "G": 12, "H": 24, "I": 24, "J": 24, "K": 14, "L": 12, "M": 24}
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width
+    if include_source:
+        for column, width in {"N": 36, "O": 24, "P": 60}.items():
+            sheet.column_dimensions[column].width = width
+        for row in sheet.iter_rows(min_row=2):
+            row[13].data_type = "s"
+            row[15].alignment = Alignment(wrap_text=True, vertical="top")
 
-    sheet.auto_filter.ref = f"A1:M{max(2, len(comments) + 1)}"
+    last_column = "P" if include_source else "M"
+    sheet.auto_filter.ref = f"A1:{last_column}{max(2, len(comments) + 1)}"
     if comments:
-        table = Table(displayName="DouyinComments", ref=f"A1:M{len(comments) + 1}")
+        table = Table(displayName="DouyinComments", ref=f"A1:{last_column}{len(comments) + 1}")
         table.tableStyleInfo = TableStyleInfo(
             name="TableStyleMedium2",
             showFirstColumn=False,

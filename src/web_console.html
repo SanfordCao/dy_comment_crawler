@@ -348,6 +348,32 @@
             color: var(--muted);
             font-size: 13px
         }
+        /* 时间位于右侧，私聊图标紧随昵称，避免操作与用户身份分离。 */
+        .comment-head-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+        .comment-chat{color:var(--teal);width:32px;height:32px;flex-shrink:0}
+        .comment-chat:disabled{opacity:.4;cursor:not-allowed}
+        #chatDialog .dialog{width:min(100%,560px)}
+        #chatIdentity{white-space:pre-wrap;overflow-wrap:anywhere}
+        .chat-status{font-size:13px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
+        .chat-status.error{color:#a5322d}
+        #chatDraft{width:100%;min-height:120px;resize:vertical;border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff}
+        .bulk-chat-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0;color:var(--muted);font-size:14px}
+        .bulk-chat-actions label,.comment-author-selection{display:flex;align-items:center;gap:8px}
+        .comment-author-selection{min-width:0}
+        #bulkChatDialog .dialog{width:min(100%,680px)}
+        #bulkChatRecipients{max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin:12px 0}
+        .bulk-chat-recipient{padding:8px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+        .bulk-chat-recipient:last-child{border-bottom:0}
+        .bulk-chat-recipient small{display:block;color:var(--muted);white-space:pre-wrap}
+        /* 分类标题与人数常驻，明细可折叠；轮询保留用户当前展开状态。 */
+        .bulk-chat-group{margin:6px 0;border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+        .bulk-chat-group summary{cursor:pointer;font-weight:600;display:flex;align-items:center;gap:8px}
+        .bulk-chat-group summary::before{content:'▸'}
+        .bulk-chat-group[open] summary::before{content:'▾'}
+        .bulk-chat-group summary span{margin-left:auto;border-radius:12px;padding:2px 9px;background:#edf3ef}
+        .bulk-chat-group[data-kind="submitted"] summary{color:var(--teal)}
+        .bulk-chat-group[data-kind="failed"] summary,.bulk-chat-group[data-kind="review"] summary{color:#a5322d}
+        #bulkChatDraft{width:100%;min-height:120px;resize:vertical;border:1px solid var(--line);border-radius:12px;padding:12px}
 
         .comment-text {
             white-space: pre-wrap;
@@ -381,11 +407,6 @@
             text-align: center;
             color: var(--muted);
             padding: 60px 20px
-        }
-
-        .more {
-            width: 100%;
-            margin-top: 14px
         }
 
         .notice {
@@ -538,6 +559,7 @@
         .dialog-actions .btn {
             min-width: 92px
         }
+
 
         .dialog-actions .btn.danger {
             background: #c7463d;
@@ -727,10 +749,6 @@
             padding-right: 5px
         }
 
-        .comments-scroll > .more {
-            margin-bottom: 4px
-        }
-
         .history-layout .comments {
             min-height: 100%;
             align-content: start
@@ -814,6 +832,8 @@
             color: var(--teal);
             font-size: 13px
         }
+        /* 设置与常驻操作按钮分开，避免两块区域挤在一起。 */
+        #advancedToggle {margin-top:24px}
 
         .advanced-settings {
             padding: 2px 12px 1px;
@@ -824,6 +844,46 @@
         .advanced-settings[hidden] {
             display: none
         }
+        /* 导航与内容共用卡片边框，用内部底色与分隔线减少左右割裂感。 */
+        .config-layout{display:grid;grid-template-columns:190px minmax(0,1fr);padding:0;overflow:hidden;min-height:420px}
+        .config-sidebar{padding:18px 12px;background:#f5f8f4;border-right:1px solid var(--line)}
+        .config-category{width:100%;text-align:left;border:1px solid transparent;border-radius:10px;padding:12px 16px;margin-bottom:8px;background:transparent;color:var(--muted);font-weight:600}
+        .config-category:hover{background:#eaf0e9}
+        .config-category[aria-selected="true"]{border-color:#b9d8ce;background:#e8f5ee;color:var(--teal);font-weight:700}
+        .config-panel{padding:24px;min-width:0}
+        .config-panel[hidden]{display:none}
+        .config-placeholder{color:var(--muted);margin:0}
+        @media (max-width:850px){
+            .config-layout{grid-template-columns:minmax(0,1fr)}
+            .config-sidebar{display:flex;gap:8px;border-right:0;border-bottom:1px solid var(--line);padding:12px}
+            .config-category{width:auto;margin:0}
+            .config-panel{padding:20px}
+        }
+        .preset-manager {padding:12px;background:#f5f8f4;border:1px solid var(--line);border-radius:12px;margin-bottom:16px}
+        .preset-manager .actions {margin:8px 0;flex-wrap:wrap}
+        /* 表格与操作按钮继承页面字号，避免方案区域文字比表格外正文小。 */
+        .preset-manager .btn {font-size:inherit;padding:9px 12px}
+        .preset-table-wrap{overflow-x:auto;margin-bottom:12px}
+        .preset-table{width:100%;border-collapse:collapse;font-size:inherit;text-align:left}
+        .preset-table th,.preset-table td{padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+        .preset-table th{color:var(--muted);font-weight:650;white-space:nowrap}
+        .preset-table tr.preset-current{background:#e8f5ee}
+        .preset-table tr.preset-viewed{outline:1px solid #90bdb0;outline-offset:-1px}
+        .preset-table td:first-child{overflow-wrap:anywhere;min-width:100px}
+        .preset-table .preset-row-actions{display:flex;gap:5px;white-space:nowrap}
+        .preset-table .preset-row-actions .btn{padding:6px 8px}
+        .preset-badge{display:inline-block;color:var(--teal);background:#d9eee3;padding:3px 7px;border-radius:6px;white-space:nowrap}
+        /* 未使用状态使用中性灰标签，通过文字和颜色共同区分当前配置。 */
+        .preset-badge-inactive{color:#707b75;background:#ecefeb;font-weight:400}
+        /* 查看时也保留操作栏高度，避免编辑按钮出现后撑大行距、推移下方配置。 */
+        .preset-detail-header{display:flex;gap:10px;align-items:center;justify-content:space-between;margin:14px 0;min-height:44px}
+        .preset-detail-header .actions{margin:0}
+        #updatePreset[hidden],#cancelPresetEdit[hidden]{display:none}
+        #savePreset[hidden]{display:none}
+        .preset-table .preset-add-cell{padding:0;text-align:center}
+        .preset-add{width:100%;border:0;background:transparent;padding:9px;color:var(--teal);font-size:26px;cursor:pointer}
+        .preset-add:hover:not(:disabled){background:#e8f5ee}
+        .preset-add:disabled{opacity:.4;cursor:not-allowed}
 
         .log-card {
             display: flex;
@@ -948,6 +1008,12 @@
             transform: translateX(18px)
         }
 
+        /* 只读/运行禁用时降低饱和度，保留滑块位置和底色差异以辨认开关状态。 */
+        .account-toggle:has(input:disabled) {cursor:default;color:#7c8983}
+        .account-toggle input:disabled + .account-switch {background:#e5e9e6;box-shadow:none}
+        .account-toggle input:disabled:checked + .account-switch {background:#a9c3b7}
+        .account-toggle input:disabled + .account-switch:after {background:#f6f8f6}
+
         .account-toggle input:focus-visible + .account-switch {
             outline: 3px solid #0f766e55;
             outline-offset: 3px
@@ -990,6 +1056,24 @@
             cursor: not-allowed;
             opacity: .7
         }
+
+        /* 查看配置时统一使用只读外观；仅改颜色，不改变控件尺寸与行距。 */
+        #advancedSettings input:not([type="checkbox"]):disabled,
+        #advancedSettings select:disabled {
+            background-color: #eef1ed;
+            border-color: #d9dfd9;
+            color: #707b75;
+            -webkit-text-fill-color: #707b75;
+            opacity: 1;
+            cursor: default;
+            box-shadow: none
+        }
+
+        #advancedSettings select:disabled {
+            /* 查看状态不可展开，同时移除自绘箭头和浏览器原生箭头。 */
+            background-image: none
+        }
+        #advancedSettings select:disabled::picker-icon{display:none}
 
         select option {
             background: #fffdf8;
@@ -1144,9 +1228,13 @@
             font-size: 13px
         }
 
-        .time-filter span {
+        .time-filter > label {
             font-weight: 700;
             color: var(--ink)
+        }
+
+        .time-filter > #clear {
+            margin-left: auto
         }
 
         .toolbar .time-filter input {
@@ -1187,8 +1275,15 @@
 
         .run-item {
             height: 82px;
-            min-height: 82px
+            min-height: 82px;
+            grid-template-columns:22px minmax(0,1fr)
         }
+        .run-check{width:18px;height:18px;align-self:center;margin:0;accent-color:var(--teal);cursor:pointer}
+        .history-actions{display:flex;gap:6px;align-items:center}
+        .history-actions #refresh,.history-actions #exportMerged,.history-actions #exportSeparate{color:var(--teal)}
+        .history-selection{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);margin:0 0 12px}
+        .history-actions .icon-button:disabled{opacity:.4;cursor:not-allowed}
+        #dialogRunName{max-height:260px;overflow:auto}
 
         .run-item-actions {
             display: flex;
@@ -1393,8 +1488,9 @@
         }
 
         .batch-items {
-            max-height: 240px;
-            overflow-y: auto;
+            /* 按任务数量自然展开，队列不再独立滚动。 */
+            max-height: none;
+            overflow: visible;
             display: grid;
             gap: 8px
         }
@@ -1439,8 +1535,9 @@
         .video-links {
             display: grid;
             gap: 9px;
-            max-height: 300px;
-            overflow-y: auto;
+            /* 输入框随链接数量展开，避免在页面中再嵌套滚动区域。 */
+            max-height: none;
+            overflow: visible;
             padding: 3px
         }
 
@@ -1476,6 +1573,7 @@
             cursor: not-allowed
         }
         .video-link-row.removable {grid-template-columns:minmax(0,1fr) 46px 46px}
+        .video-link-row button[hidden]{display:none}
         .video-link-remove {background:#fff1ef;border-color:#ebc2bc;color:#a5322d}
         .video-link-remove:hover:not(:disabled) {background:#fae0dc}
         .queue-actions{display:flex;align-items:center;gap:10px}
@@ -1500,8 +1598,18 @@
             background-position:right 14px center;
         }
         #commentScope::picker-icon, #fetchMode::picker-icon{margin-left:auto}
-        .grid > .log-card{min-height:0;max-height:none}
-        .grid > .log-card > .log{height:0;min-height:0;flex:1;overflow-y:auto}
+        /* 日志区自然展开，不再跟随左侧设置高度；每个任务独立滚动。 */
+        .grid > .log-card{height:auto;min-height:0;max-height:none;align-self:start}
+        .grid > .log-card > .log{height:160px;min-height:0;flex:none;overflow-y:auto;margin-top:12px}
+        .log-card [hidden]{display:none!important}
+        .log-empty{padding:20px 12px;text-align:center;color:var(--muted);background:#f5f8f4;border-radius:12px}
+        .task-logs{display:grid;gap:14px;margin-top:14px}
+        .task-log-card{min-width:0;border:1px solid var(--line);border-radius:14px;overflow:hidden}
+        .task-log-header{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:12px 14px;background:#f5f8f4}
+        .task-log-state{font-size:13px;color:var(--teal);white-space:nowrap}
+        .task-log-url{padding:0 14px 10px;background:#f5f8f4;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+        .task-log-body{height:260px;overflow-y:auto;overscroll-behavior:contain;padding:14px;background:#14231d;color:#c6dfd2;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 ui-monospace,monospace}
+        .task-log-body[data-empty="true"]{height:auto;min-height:56px;background:#fff;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -1524,7 +1632,28 @@
                 <h2>采集配置</h2>
                 <div class="field"><label for="url">抖音视频链接</label>
                     <div id="videoLinks" class="video-links"></div>
-                    <small>点击右侧 + 添加链接，最多 100 个；自动去重后按顺序采集，空输入框忽略。</small></div>
+                    <small>点击右侧 + 添加链接，最多 100 个；自动去重后按设置采集，空输入框忽略。</small></div>
+                <!-- 采集操作常驻设置上方，折叠设置时仍可启动或停止任务。 -->
+                <div class="actions">
+                    <button id="start" class="btn primary">启动采集</button>
+                    <button id="stop" class="btn danger" disabled>停止任务</button>
+                </div>
+                <!-- 队列常驻设置上方，折叠配置时仍能查看本轮任务进度。 -->
+                <section id="batchProgress" class="batch-progress" hidden>
+                    <div class="summary"><strong>采集队列</strong><span id="batchSummary"></span></div>
+                    <div id="batchItems" class="batch-items"></div>
+                </section>
+                <button id="advancedToggle" class="advanced-toggle" type="button" aria-expanded="true"
+                        aria-controls="advancedSettings"><span>设置</span><span
+                        id="advancedToggleLabel">收起　⌃</span></button>
+                <!-- 除视频链接外，采集选项统一放入设置；折叠不影响取值和自动保存。 -->
+                <div id="advancedSettings" class="advanced-settings">
+                <!-- 命名方案与当前表单分别保存，调整选项不会悄悄覆盖旧方案。 -->
+                <div id="presetManager" class="preset-manager">
+                    <div class="preset-table-wrap"><table class="preset-table"><thead><tr><th scope="col">配置方案</th><th scope="col">使用状态</th><th scope="col">操作</th></tr></thead><tbody id="presetRows"></tbody></table></div>
+                    <small id="presetHint">查看不会改变当前使用配置。</small>
+                </div>
+                <div class="preset-detail-header"><strong id="presetDetailTitle">当前使用配置</strong><div class="actions"><button id="savePreset" type="button" class="btn primary" hidden>保存方案</button><button id="updatePreset" type="button" class="btn" hidden>保存修改</button><button id="cancelPresetEdit" type="button" class="btn" hidden>取消编辑</button></div></div>
                 <div class="row">
                     <div class="field"><label for="commentScope">评论层级</label><select id="commentScope">
                         <option value="top_level" selected>仅一级评论（默认）</option>
@@ -1544,11 +1673,8 @@
                                                                                             aria-describedby="douyinIdHelp"><span
                         class="account-switch" aria-hidden="true"></span>获取抖音号</label><small id="douyinIdHelp">默认关闭。开启后，评论接口缺失的抖音号会通过用户主页接口补充，同一用户只查询一次；额外访问主页可能影响性能、增加采集耗时。</small>
                 </div>
-                <div class="field"><label for="concurrent" class="account-toggle"><input id="concurrent" type="checkbox" role="switch" aria-describedby="concurrentHelp"><span class="account-switch" aria-hidden="true"></span>并发采集</label><small id="concurrentHelp">默认关闭，按顺序采集。开启后最多同时采集 2 个视频，日志按视频标记；请求增加可能更容易触发验证，遇到验证会暂停启动新任务。</small></div>
-                <button id="advancedToggle" class="advanced-toggle" type="button" aria-expanded="false"
-                        aria-controls="advancedSettings"><span>更多设置</span><span
-                        id="advancedToggleLabel">展开　⌄</span></button>
-                <div id="advancedSettings" class="advanced-settings" hidden>
+                <div class="field"><label for="concurrent" class="account-toggle"><input id="concurrent" type="checkbox" role="switch" aria-describedby="concurrentHelp"><span class="account-switch" aria-hidden="true"></span>并发采集</label><small id="concurrentHelp">默认关闭，按顺序采集。开启后可设置并发数量；数量越大，内存和请求越多，更容易触发验证。遇到验证会暂停启动新任务。</small></div>
+                <div id="concurrencyOptions" class="field" hidden><label for="concurrencyLimit">同时采集的视频数量</label><input id="concurrencyLimit" type="number" min="1" max="100" step="1" value="2"><small>默认 2，可设置 1–100；实际并发不超过待采集的视频数量。</small></div>
                     <div class="row">
                         <div class="field"><label for="maxMinutes">最长运行时间</label><input id="maxMinutes"
                                                                                               type="number" min="1"
@@ -1572,14 +1698,6 @@
                         </div>
                     </div>
                 </div>
-                <div class="actions">
-                    <button id="start" class="btn primary">启动采集</button>
-                    <button id="stop" class="btn danger" disabled>停止任务</button>
-                </div>
-                <section id="batchProgress" class="batch-progress" hidden>
-                    <div class="summary"><strong>采集队列</strong><span id="batchSummary"></span></div>
-                    <div id="batchItems" class="batch-items"></div>
-                </section>
             </div>
             <div class="card log-card">
                 <div class="statusline"><span id="dot" class="dot"></span><strong id="statusText">等待开始</strong>
@@ -1588,7 +1706,9 @@
                     <div>请在程序打开的 Chrome 窗口中完成登录或验证，然后点击继续。</div>
                     <button id="continue" class="btn primary" style="margin-top:10px">登录完成，继续</button>
                 </div>
-                <div id="log" class="log">暂无运行日志</div>
+                <div id="logEmpty" class="log-empty">暂无采集任务，启动后将在这里分别显示每个视频的日志。</div>
+                <div id="log" class="log" hidden></div>
+                <div id="taskLogs" class="task-logs" hidden></div>
             </div>
         </div>
     </section>
@@ -1597,8 +1717,14 @@
         <div class="history-layout">
             <aside class="card">
                 <div class="summary"><h2>历史任务</h2>
-                    <button id="refresh" class="btn">刷新</button>
+                    <div class="history-actions">
+                    <button id="refresh" class="icon-button" type="button" title="刷新历史任务" aria-label="刷新历史任务"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/></svg></button>
+                    <button id="exportMerged" type="button" class="icon-button" title="合并成一个文件" aria-label="合并成一个文件" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 2h5v6H3zM16 2h5v6h-5zM5.5 10v2L12 15l6.5-3v-2M12 15v3m-2-2 2 2 2-2M8 19h8v3H8z"/></svg></button>
+                    <button id="exportSeparate" type="button" class="icon-button" title="分别下载多个文件" aria-label="分别下载多个文件" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15H2V2h11v3M7 18H5V5h11v3M8 8h11v6M8 8v13h5M18 14v8m-3-3 3 3 3-3"/></svg></button>
+                    <button id="deleteRuns" class="icon-button" type="button" title="删除所选任务" aria-label="删除所选任务" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-.8 14H5.8L5 6m4 4v6m6-6v6"/></svg></button>
+                    </div>
                 </div>
+                <label class="history-selection"><input id="selectAllRuns" class="run-check" type="checkbox">全选<span id="runSelectionCount">已选 0 项</span></label>
                 <div id="runs" class="runs">
                     <div class="empty">正在读取…</div>
                 </div>
@@ -1616,24 +1742,35 @@
                     <button id="historyAdvancedToggle" class="history-advanced" type="button" aria-expanded="false"
                             aria-controls="historyAdvancedPanel"><span id="historyAdvancedLabel">高级筛选</span>
                     </button>
-                    <button id="clear" class="btn">清空筛选</button>
-                    <label id="historyAdvancedPanel" class="time-filter" hidden
-                           for="commentAfter"><span>评论发表于此时间之后</span><input id="commentAfter"
+                    <div id="historyAdvancedPanel" class="time-filter" hidden>
+                        <label for="commentAfter">评论发表于此时间之后</label><input id="commentAfter"
                                                                                       type="datetime-local" step="1"
                                                                                       aria-describedby="commentAfterHelp"><small
-                            id="commentAfterHelp">按本机时区筛选；留空显示全部时间</small></label></div>
+                            id="commentAfterHelp">按本机时区筛选；留空显示全部时间</small>
+                        <button id="clear" class="btn" type="button">清空筛选</button>
+                    </div></div>
+                <div class="bulk-chat-actions">
+                    <label><input id="selectVisibleChatUsers" class="run-check" type="checkbox">选择当前显示用户</label>
+                    <span id="chatSelectionCount">已选 0 位用户</span>
+                    <button id="openBulkChat" class="btn" type="button" disabled>批量私信</button>
+                    <span id="bulkChatSummary" role="status" aria-live="polite"></span>
+                </div>
                 <div class="comments-scroll">
                     <div id="comments" class="comments">
                         <div class="empty">从左侧选择一次采集结果</div>
                     </div>
-                    <button id="more" class="btn more" hidden>加载更多</button>
                 </div>
             </section>
         </div>
     </section>
 
     <section id="xpathConfig" class="view">
-        <div class="card" style="max-width:1100px">
+        <div class="card config-layout">
+        <aside class="config-sidebar" role="tablist" aria-label="高级配置分类" aria-orientation="vertical">
+            <button id="xpathCategory" class="config-category" type="button" role="tab" aria-selected="true" aria-controls="xpathSettings">XPath配置</button>
+            <button id="otherCategory" class="config-category" type="button" role="tab" aria-selected="false" aria-controls="otherSettings">其他配置</button>
+        </aside>
+        <div id="xpathSettings" class="config-panel" role="tabpanel" aria-labelledby="xpathCategory">
             <h2>页面操作与视频信息 XPath</h2>
             <p style="margin:-8px 0 20px;color:var(--muted)">采集顺序：打开视频并暂停 → 点击评论图标 → 点击详情 XPath →
                 读取作者昵称和标题 → 点击评论 XPath → 开始采集。XPath 配置保存在本机项目目录中。</p>
@@ -1657,6 +1794,11 @@
                 <button id="clearXpath" class="btn">清空</button>
             </div>
         </div>
+        <div id="otherSettings" class="config-panel" role="tabpanel" aria-labelledby="otherCategory" hidden>
+            <h2>其他配置</h2>
+            <p class="config-placeholder">暂无其他配置项。</p>
+        </div>
+        </div>
     </section>
 </main>
 <div id="deleteDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
@@ -1676,6 +1818,45 @@
             <button id="cancelDelete" class="btn" type="button">取消</button>
             <button id="confirmDelete" class="btn danger" type="button">删除结果</button>
         </div>
+    </section>
+</div>
+<div id="chatDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="chatTitle" aria-describedby="chatHelp">
+        <h2 id="chatTitle">私聊用户</h2>
+        <p id="chatIdentity"></p>
+        <div class="field"><label for="chatDraft">私信内容</label><textarea id="chatDraft" rows="4" maxlength="1000" placeholder="填写内容后直接点击发送私信"></textarea></div>
+        <p id="chatHelp" class="chat-status">仅使用你自己的登录账号。点击“发送私信”会自动打开并核对目标会话，再提交一条消息；不自动重试。也可只打开抖音私信，人工查看。是否可私信取决于对方设置。</p>
+        <p id="chatStatus" class="chat-status" role="status" aria-live="polite"></p>
+        <div class="dialog-actions"><button id="closeChat" type="button" class="btn">关闭</button><button id="openChatPage" type="button" class="btn">打开抖音私信</button><button id="sendChatMessage" type="button" class="btn primary" disabled>发送私信</button></div>
+    </section>
+</div>
+<div id="bulkChatDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="bulkChatTitle">
+        <h2 id="bulkChatTitle">批量私信</h2>
+        <p>向下列用户发送相同文本，同一用户只发送一次。逐个处理。平台验证和私信权限限制仍然有效，请勿发送骚扰或垃圾信息。</p>
+        <div id="bulkChatRecipients"></div>
+        <div id="bulkChatCompose"><label for="bulkChatDraft">统一私信内容</label><textarea id="bulkChatDraft" maxlength="1000" rows="4" placeholder="输入发送给以上所有用户的相同内容"></textarea>
+        </div>
+        <p id="bulkChatStatus" class="chat-status" role="status" aria-live="polite"></p>
+        <div class="dialog-actions"><button id="closeBulkChat" class="btn" type="button">关闭</button><button id="stopBulkChat" class="btn danger" type="button" hidden>停止后续发送</button><button id="startBulkChat" class="btn primary" type="button" disabled>批量发送</button></div>
+    </section>
+</div>
+<div id="presetNameDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="presetNameTitle">
+        <h2 id="presetNameTitle">保存配置方案</h2>
+        <p>输入名称后保存，不会自动切换当前使用配置。</p>
+        <div class="field"><label for="presetName">配置方案名称</label><input id="presetName" maxlength="50" placeholder="例如：全量评论、快速采集" autocomplete="off"></div>
+        <p id="presetNameError" class="dialog-error" hidden></p>
+        <div class="dialog-actions"><button id="cancelPresetName" type="button" class="btn">取消</button><button id="confirmPresetName" type="button" class="btn primary">保存</button></div>
+    </section>
+</div>
+<div id="presetDeleteDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="presetDeleteTitle" aria-describedby="presetDeleteDescription">
+        <div class="dialog-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-.8 14H5.8L5 6m4 4v6m6-6v6"/></svg></div>
+        <h2 id="presetDeleteTitle">删除这套配置方案？</h2>
+        <p id="presetDeleteDescription">只删除已保存的方案，当前设置和采集结果不受影响。</p>
+        <div id="presetDeleteName" class="dialog-name"></div>
+        <div class="dialog-actions"><button id="cancelDeletePreset" type="button" class="btn">取消</button><button id="confirmDeletePreset" type="button" class="btn danger">删除方案</button></div>
     </section>
 </div>
 <div id="stoppingDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
@@ -1700,7 +1881,7 @@
 <div id="toastStack" class="toast-stack" aria-label="操作提示"></div>
 <script>
     const $ = id => document.getElementById(id);
-    let selectedRun = "", selectedRunInfo = null, allComments = [], visibleCount = 40, lastStatus = "";
+    let selectedRun = "", selectedRunInfo = null, allComments = [], lastStatus = "";
     const api = async (url, options = {}) => {
         const response = await fetch(url, options);
         let data;
@@ -1717,6 +1898,17 @@
         button.classList.add("active");
         $(button.dataset.view).classList.add("active");
         if (button.dataset.view === "history") loadRuns()
+    });
+    /** 切换高级配置分类，仅切换显示，不重建表单，保留尚未保存的 XPath。 */
+    function selectConfigCategory(button) {
+        document.querySelectorAll(".config-category").forEach(tab => {
+            const selected = tab === button;
+            tab.setAttribute("aria-selected", String(selected));
+            $(tab.getAttribute("aria-controls")).hidden = !selected;
+        });
+    }
+    document.querySelectorAll(".config-category").forEach(button => {
+        button.onclick = () => selectConfigCategory(button);
     });
     function centerSelectArrows(){
         if(CSS.supports("appearance","base-select"))return;
@@ -1744,6 +1936,7 @@
         fetch_mode: $("fetchMode").value,
         fetch_douyin_id: $("fetchDouyinId").checked,
         concurrent: $("concurrent").checked,
+        concurrency_limit: +$("concurrencyLimit").value,
         challenge_wait_minutes: +$("waitMinutes").value,
         idle_rounds: 8,
         scroll_pixels: 700
@@ -1754,32 +1947,258 @@
         max_comments: "maxComments", max_minutes: "maxMinutes",
         scroll_direction: "direction", min_delay_ms: "minDelay",
         max_delay_ms: "maxDelay", challenge_wait_minutes: "waitMinutes",
-        fetch_douyin_id: "fetchDouyinId", concurrent: "concurrent"
+        fetch_douyin_id: "fetchDouyinId", concurrent: "concurrent",
+        concurrency_limit: "concurrencyLimit"
     };
 
+    // 并发关闭时隐藏数量输入，保留已设置的值供下次开启使用。
+    function syncConcurrencyOptions() {
+        $("concurrencyOptions").hidden = !$("concurrent").checked;
+    }
+    $("concurrent").addEventListener("change", syncConcurrencyOptions);
+
+    /** 将 settings 回显到表单，无返回值；只显示参数，不触发保存或方案切换。 */
+    function applyCaptureSettings(settings) {
+        for (const [key, id] of Object.entries(captureFields)) {
+            if (settings[key] == null) continue;
+            if ($(id).type === "checkbox") $(id).checked = settings[key] === true;
+            else $(id).value = settings[key];
+        }
+        syncConcurrencyOptions();
+        centerSelectArrows();
+    }
+
+    /** 读取当前实际采集参数并缓存，预览其他方案时仍以缓存作为启动参数。 */
     async function loadCaptureSettings() {
         try {
             const settings = await api("/api/capture-settings");
-            for (const [key, id] of Object.entries(captureFields)) {
-                if (settings[key] == null) continue;
-                if ($(id).type === "checkbox") $(id).checked = settings[key] === true;
-                else $(id).value = settings[key];
-            }
-            centerSelectArrows();
+            activeCaptureSettings = {...settings};
+            applyCaptureSettings(settings);
         } catch (error) {
             showNotice(`读取采集配置失败：${error.message}`, true);
         }
     }
 
     let captureSaveChain = Promise.resolve();
-    Object.values(captureFields).forEach(id => $(id).addEventListener("change", () => {
+    /** 返回表单参数副本；仅用于方案编辑，不能直接作为实际采集配置。 */
+    const currentCaptureSettings = () => {
         const options = payload();
-        const settings = Object.fromEntries(Object.keys(captureFields).map(key => [key, options[key]]));
-        captureSaveChain = captureSaveChain.then(() => api("/api/capture-settings", {
-            method: "POST", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify(settings)
-        })).catch(error => showNotice(`采集配置保存失败：${error.message}`, true));
+        return Object.fromEntries(Object.keys(captureFields).map(key => [key, options[key]]));
+    };
+    Object.values(captureFields).forEach(id => $(id).addEventListener("change", () => {
+        // 所有编辑都先保留为草稿，点击保存才持久化，取消不会污染使用中配置。
+        updatePresetHint();
     }));
+
+    let presetData = {selected: "", presets: []}, presetBusy = false, captureRunning = false;
+    let presetDeleteTarget = null;
+    let viewedPreset = "", presetEditing = false, presetCreating = false, activeCaptureSettings = {};
+    /** 显示查看/编辑提示，无参数、无返回值，强调预览不等于正在使用。 */
+    function updatePresetHint() {
+        $("presetHint").textContent = `当前使用：${presetData.selected || "默认配置"}。查看其他方案不会切换采集配置。`;
+        $("presetDetailTitle").textContent = presetCreating ? "新增方案" : `${presetEditing ? "编辑" : "查看"}：${viewedPreset || "默认配置"}`;
+    }
+    /** 同步表格、编辑控件禁用状态；预览始终只读，运行中禁止修改方案。 */
+    function syncPresetControls() {
+        const disabled = presetBusy || captureRunning;
+        $("presetManager").querySelectorAll("input,select,button").forEach(el => {
+            el.disabled = el.dataset.presetView === "true" ? presetBusy : disabled;
+            if (el.dataset.permanentlyDisabled === "true") el.disabled = true;
+        });
+        $("updatePreset").hidden = !presetEditing || presetCreating;
+        $("savePreset").hidden = !presetCreating;
+        $("savePreset").disabled = disabled;
+        $("cancelPresetEdit").hidden = !presetEditing;
+        $("cancelPresetEdit").textContent = presetCreating ? "取消" : "取消编辑";
+        $("updatePreset").disabled = disabled;
+        $("cancelPresetEdit").disabled = disabled;
+        $("confirmDeletePreset").disabled = disabled;
+        $("cancelDeletePreset").disabled = presetBusy;
+        $("presetName").disabled = disabled;
+        $("confirmPresetName").disabled = disabled;
+        $("cancelPresetName").disabled = presetBusy;
+        // 加载方案时短暂锁住表单与启动按钮，避免新旧设置交错提交。
+        Object.values(captureFields).forEach(id => {
+            $(id).disabled = disabled || !presetEditing;
+        });
+        $("start").disabled = disabled;
+    }
+    /** 查看或编辑 name 对应方案；edit 为真才允许修改，不切换当前使用方案。 */
+    function viewCapturePreset(name, edit = false) {
+        if (presetBusy || (edit && captureRunning)) return;
+        const preset = presetData.presets.find(item => item.name === name);
+        if (name ? !preset : presetData.default_enabled === false) return;
+        viewedPreset = name;
+        presetCreating = false;
+        presetEditing = edit;
+        // 查看正在使用的方案时显示实际参数，而非可能尚未更新的旧快照。
+        const settings = name === presetData.selected || !name ? activeCaptureSettings : preset.settings;
+        applyCaptureSettings(settings);
+        renderPresetRows();
+        updatePresetHint();
+        syncPresetControls();
+    }
+    /** 判断方案是否可删除；当前使用方案和唯一剩余方案始终保留。 */
+    function canDeletePreset(name) {
+        const hasDefault = presetData.default_enabled !== false;
+        const exists = name ? presetData.presets.some(item => item.name === name) : hasDefault;
+        return exists && name !== presetData.selected && presetData.presets.length + Number(hasDefault) > 1;
+    }
+    /** 构建方案表格，名称通过 textContent 显示；已删除的默认方案不再生成。 */
+    function renderPresetRows() {
+        const body = $("presetRows");
+        body.replaceChildren();
+        for (const preset of [...(presetData.default_enabled === false ? [] : [{name:""}]), ...presetData.presets]) {
+            const row = document.createElement("tr"), name = document.createElement("td"), state = document.createElement("td"), operations = document.createElement("td");
+            row.className = [preset.name === presetData.selected ? "preset-current" : "", preset.name === viewedPreset ? "preset-viewed" : ""].join(" ");
+            name.textContent = preset.name || "默认配置";
+            const isCurrent = preset.name === presetData.selected;
+            const badge = document.createElement("span");
+            badge.className = "preset-badge" + (isCurrent ? "" : " preset-badge-inactive");
+            badge.textContent = isCurrent ? "当前使用" : "未使用";
+            state.append(badge);
+            const actions = document.createElement("div");actions.className = "preset-row-actions";
+            for (const [label, action] of [["查看",()=>viewCapturePreset(preset.name)],["编辑",()=>viewCapturePreset(preset.name,true)],["应用",()=>applyCapturePreset(preset.name)],["删除",()=>openPresetDeleteDialog(preset.name)]]) {
+                const button = document.createElement("button");button.type = "button";button.className = "btn" + (label === "删除" ? " danger" : "");button.textContent = label;
+                button.disabled = presetBusy || (label !== "查看" && captureRunning) || (label === "删除" && !canDeletePreset(preset.name));
+                if (label !== "查看") button.dataset.presetMutation = "true";
+                else button.dataset.presetView = "true";
+                if (label === "删除" && !canDeletePreset(preset.name)) {
+                    button.dataset.permanentlyDisabled = "true";
+                    button.title = preset.name === presetData.selected ? "当前使用的配置不能删除" : "至少保留一个配置方案";
+                }
+                // 正在使用的方案无需重复应用，轮询刷新时也保持按钮禁用。
+                if (label === "应用" && preset.name === presetData.selected) {
+                    button.dataset.permanentlyDisabled = "true";
+                    button.disabled = true;
+                }
+                button.onclick = action;actions.append(button);
+            }
+            operations.append(actions);row.append(name,state,operations);body.append(row);
+        }
+        // 新增入口固定在最后一行，不与已保存方案混淆。
+        const addRow = document.createElement("tr"), cell = document.createElement("td"), add = document.createElement("button");
+        cell.colSpan = 3;cell.className = "preset-add-cell";
+        add.type = "button";add.className = "preset-add";add.textContent = "+";add.setAttribute("aria-label", "新增配置方案");
+        add.disabled = presetBusy || captureRunning;add.onclick = beginCreatePreset;
+        cell.append(add);addRow.append(cell);body.append(addRow);
+    }
+    /** 开始新增草稿；使用服务端默认值，不继承当前方案，也不写入持久化配置。 */
+    function beginCreatePreset() {
+        if (presetBusy || captureRunning || !presetData.defaults) return;
+        presetCreating = true;presetEditing = true;viewedPreset = "";
+        applyCaptureSettings(presetData.defaults);
+        updatePresetHint();syncPresetControls();
+    }
+    /** 接收服务端方案列表，重绘表格；默认下方展示当前使用配置。 */
+    function renderCapturePresets(data) {
+        presetData = data;
+        closePresetDeleteDialog();
+        renderPresetRows();
+        updatePresetHint();
+        syncPresetControls();
+        centerSelectArrows();
+    }
+    /** 读取保存方案并默认查看当前使用的配置，不启动采集。 */
+    async function loadCapturePresets() {
+        try {renderCapturePresets(await api("/api/capture-presets"));viewCapturePreset(presetData.selected);}
+        catch (error) {showNotice(`读取配置方案失败：${error.message}`, true);}
+    }
+    /** 应用表格中 name 对应的方案；默认配置沿用实际参数，不读取其他方案预览。 */
+    function applyCapturePreset(name) {
+        return managePreset(name ? "select" : "custom", name, name ? null : activeCaptureSettings);
+    }
+    /** 执行 action/name 操作；settingsOverride 可指定参数，无值时使用编辑表单。 */
+    async function managePreset(action, name, settingsOverride = null) {
+        if (presetBusy || captureRunning) return;
+        presetBusy = true;
+        syncPresetControls();
+        // 排在当前表单的自动保存之后，防止旧设置晚到覆盖新加载的方案。
+        const settings = settingsOverride || currentCaptureSettings();
+        const request = captureSaveChain.then(() => api("/api/capture-presets", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({action, name, settings})
+        }));
+        captureSaveChain = request.catch(() => {});
+        try {
+            const data = await request;
+            activeCaptureSettings = {...data.settings};
+            const keepView = ["create", "update"].includes(action) ? name : data.selected;
+            renderCapturePresets(data);
+            presetBusy = false;
+            viewCapturePreset(keepView);
+            if (action === "create") $("presetName").value = "";
+            showNotice({create:"配置方案已保存",update:"当前方案已更新",select:"配置方案已应用",delete:"配置方案已删除，当前设置保留",custom:"默认配置已保存并应用"}[action]);
+            return true;
+        } catch (error) {
+            showNotice(error.message, true);
+            return false;
+        } finally {
+            presetBusy = false;
+            syncPresetControls();
+        }
+    }
+    /** 关闭命名弹窗但保留新增草稿，取消后可继续调整参数。 */
+    function closePresetNameDialog() {
+        $("presetNameDialog").classList.remove("show");
+        $("presetNameDialog").setAttribute("aria-hidden", "true");
+    }
+    /** 打开命名弹窗，无副作用；只有确认保存才发出新建请求。 */
+    function openPresetNameDialog() {
+        if (!presetCreating || presetBusy || captureRunning) return;
+        $("presetName").value = "";$("presetNameError").hidden = true;
+        $("presetNameDialog").classList.add("show");$("presetNameDialog").setAttribute("aria-hidden", "false");
+        $("presetName").focus();
+    }
+    /** 校验名称并保存草稿；失败保留弹窗和参数，避免重复输入。 */
+    async function confirmPresetName() {
+        if (presetBusy || captureRunning) return;
+        const name = $("presetName").value.trim();
+        if (!name || name.length > 50 || presetData.presets.some(item => item.name === name)) {
+            $("presetNameError").textContent = !name ? "请输入配置方案名称" : name.length > 50 ? "名称不能超过 50 个字符" : "同名方案已存在，请更换名称";
+            $("presetNameError").hidden = false;return;
+        }
+        if (await managePreset("create", name)) closePresetNameDialog();
+    }
+    $("savePreset").onclick = openPresetNameDialog;
+    $("confirmPresetName").onclick = confirmPresetName;
+    $("cancelPresetName").onclick = () => {if (!presetBusy) closePresetNameDialog();};
+    $("presetNameDialog").onclick = event => {if (event.target === $("presetNameDialog") && !presetBusy) closePresetNameDialog();};
+    $("presetName").addEventListener("keydown", event => {if (event.key === "Enter") {event.preventDefault();confirmPresetName();}});
+    $("updatePreset").onclick = () => {
+        if (viewedPreset) managePreset("update", viewedPreset);
+        else managePreset("custom", "");
+    };
+    $("cancelPresetEdit").onclick = () => viewCapturePreset(presetCreating ? presetData.selected : viewedPreset);
+    /** 关闭方案删除弹窗，清空固定目标，不更改任何配置。 */
+    function closePresetDeleteDialog() {
+        const dialog = $("presetDeleteDialog");
+        const wasOpen = dialog.classList.contains("show");
+        dialog.classList.remove("show");
+        dialog.setAttribute("aria-hidden", "true");
+        presetDeleteTarget = null;
+        if (wasOpen) $("presetDetailTitle").focus();
+    }
+    /** 打开 name 对应的删除确认弹窗；确认目标固定，防止查看切换后误删。 */
+    function openPresetDeleteDialog(name) {
+        if (presetBusy || captureRunning || !canDeletePreset(name)) return;
+        // 固定弹窗打开时的方案名称，确认只会删除用户看到的这一套方案。
+        presetDeleteTarget = name;
+        $("presetDeleteName").textContent = presetDeleteTarget || "默认配置";
+        $("presetDeleteDialog").classList.add("show");
+        $("presetDeleteDialog").setAttribute("aria-hidden", "false");
+        $("cancelDeletePreset").focus();
+    }
+    $("confirmDeletePreset").onclick = () => {
+        // 空字符串是有效的默认方案标识，不能用真假判断忽略它。
+        if (presetDeleteTarget !== null && canDeletePreset(presetDeleteTarget)) managePreset("delete", presetDeleteTarget);
+    };
+    $("cancelDeletePreset").onclick = () => {
+        if (!presetBusy) closePresetDeleteDialog();
+    };
+    $("presetDeleteDialog").onclick = event => {
+        if (event.target === $("presetDeleteDialog") && !presetBusy) closePresetDeleteDialog();
+    };
 
     async function loadXpathSettings() {
         try {
@@ -1836,6 +2255,22 @@
     };
     const videoUrls = () => Array.from($("videoLinks").querySelectorAll("input"), input => input.value.trim()).filter(Boolean);
 
+    /** 按行数同步操作：单行仅加号，多行仅末行保留加号，所有行可删除。 */
+    function syncVideoLinkButtons() {
+        const rows = Array.from($("videoLinks").children);
+        rows.forEach((row, index) => {
+            const last = index === rows.length - 1;
+            row.querySelector(".video-link-remove").hidden = rows.length === 1;
+            row.querySelector(".video-link-add:not(.video-link-remove)").hidden = !last;
+            row.classList.toggle("removable", rows.length > 1 && last);
+            // 首行删除后仍将标签关联到新的首个输入框。
+            const input = row.querySelector("input");
+            if (index === 0) input.id = "url"; else input.removeAttribute("id");
+            row.querySelectorAll("input,button").forEach(el => el.disabled = captureRunning);
+        });
+    }
+
+    /** 新增链接行并刷新全部操作按钮；返回新输入框供调用方聚焦。 */
     function addVideoLink(value = "", after = null) {
         const box = $("videoLinks");
         if (box.children.length >= 100) {
@@ -1861,8 +2296,7 @@
             next?.focus()
         };
         row.append(input, add);
-        if (box.children.length) {
-            row.classList.add("removable");
+        {
             const remove = document.createElement("button");
             remove.type = "button";
             remove.className = "video-link-add video-link-remove";
@@ -1872,14 +2306,17 @@
             remove.onclick = () => {
                 const neighbor = row.previousElementSibling || row.nextElementSibling;
                 row.remove();
+                syncVideoLinkButtons();
                 neighbor?.querySelector("input")?.focus();
             };
             row.insertBefore(remove, add);
         }
         if (after) after.after(row); else box.append(row);
+        syncVideoLinkButtons();
         return input
     }
 
+    /** 用 urls 重建链接列表，空数组至少保留一个输入框。 */
     function setVideoLinks(urls) {
         $("videoLinks").replaceChildren();
         (urls.length ? urls : [""]).forEach(url => addVideoLink(url))
@@ -1899,7 +2336,8 @@
         button.disabled = true;
         try {
             await captureSaveChain;
-            const options = payload(), urls = videoUrls();
+            // 启动只使用已保存且正在使用的参数，绝不读取其他方案的预览/草稿。
+            const options = {...payload(), ...activeCaptureSettings}, urls = videoUrls();
             if (!urls.length) throw new Error("请先填写抖音视频链接");
             if (urls.length === 1) options.url = urls[0]; else {
                 options.urls = urls;
@@ -1910,16 +2348,18 @@
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify(options)
             });
-            showNotice(options.concurrent ? "任务已启动，最多同时采集 2 个视频" : "任务已启动，视频将按顺序采集")
+            showNotice(options.concurrent ? `任务已启动，最多同时采集 ${options.concurrency_limit} 个视频` : "任务已启动，视频将按顺序采集")
         } catch (error) {
             showNotice(error.message, true);
             button.disabled = false
         }
     };
 
+    /** 显示本轮全部任务及最终状态；下一次成功启动才由服务端替换本轮队列。 */
     function renderBatch(batch) {
         const isQueued = item => ["pending", "running", "waiting_for_user", "stopping"].includes(item.status);
-        const items = (batch?.items || []).filter(isQueued).map(item => ({...item, batchId: batch.id}));
+        // 已结束任务仍保留在服务端内存，不再过滤，方便查看整轮结果。
+        const items = (batch?.items || []).map(item => ({...item, batchId: batch.id}));
         for (const previous of batch?.unfinished_batches || []) {
             items.push(...previous.items.filter(isQueued).map(item => ({...item, batchId: previous.id})));
         }
@@ -1941,7 +2381,8 @@
             cancelled: "未启动",
             interrupted: "已中断"
         };
-        $("batchSummary").textContent = `未完成 ${items.length} 个`;
+        const remaining = items.filter(isQueued).length;
+        $("batchSummary").textContent = `共 ${items.length} 个 · 已结束 ${items.length - remaining} 个 · 未完成 ${remaining} 个`;
         const box = $("batchItems"), scroll = box.scrollTop;
         box.replaceChildren();
         items.forEach((item, index) => {
@@ -1960,6 +2401,8 @@
             stop.setAttribute("aria-label", `停止视频 ${index + 1}`);
             stop.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>';
             stop.disabled = item.batchId !== batch.id || batch.status !== "running" || !["pending", "running", "waiting_for_user"].includes(item.status);
+            // 终态任务仅展示进度，不再提供无效的停止操作。
+            stop.hidden = !isQueued(item);
             stop.onclick = async () => {
                 stop.disabled = true;
                 try {
@@ -2074,15 +2517,45 @@
         return logs
     }
 
-    function renderLogs(logs) {
-        const box = $("log");
-        const text = logs.length ? logs.join("\n") : "暂无运行日志";
+    /** 更新一个日志框，阅读旧日志时保持位置，位于底部时才跟随新增日志。 */
+    function updateLogBox(box, logs, placeholder = "暂无运行日志") {
+        const text = logs.length ? logs.join("\n") : placeholder;
         if (box.textContent === text) return;
         // Check before adding new lines, so an existing reader position is kept.
         const followLatest = box.scrollHeight - box.clientHeight - box.scrollTop <= 24;
         const previousTop = box.scrollTop;
         box.textContent = text;
         box.scrollTop = followLatest ? box.scrollHeight : previousTop;
+    }
+
+    const taskLogCards = new Map();
+    /** 按稳定任务键更新日志卡片，保留每个任务自己的滚动位置。 */
+    function renderTaskLogs(tasks, logs) {
+        const keys = new Set(tasks.map(task => task.key));
+        for (const [key, card] of taskLogCards) {
+            if (!keys.has(key)) {card.root.remove();taskLogCards.delete(key);}
+        }
+        const labels = {pending:"等待采集",running:"采集中",waiting_for_user:"等待人工处理",stopping:"正在停止",succeeded:"已完成",failed:"失败",stopped:"已停止",cancelled:"未启动",interrupted:"已中断"};
+        for (const task of tasks) {
+            let card = taskLogCards.get(task.key);
+            if (!card) {
+                const root = document.createElement("section"), header = document.createElement("div"), title = document.createElement("strong"), status = document.createElement("span"), url = document.createElement("div"), body = document.createElement("div");
+                root.className="task-log-card";header.className="task-log-header";status.className="task-log-state";url.className="task-log-url";body.className="task-log-body";
+                header.append(title,status);root.append(header,url,body);$("taskLogs").append(root);
+                card={root,title,status,url,body};taskLogCards.set(task.key,card);
+            }
+            card.title.textContent=`视频 ${task.index}`;
+            card.status.textContent=labels[task.status] || task.status;
+            card.url.textContent=task.url;
+            card.body.dataset.empty=String(!task.logs.length);
+            updateLogBox(card.body,task.logs,task.status === "pending" ? "等待任务开始…" : "暂无日志");
+        }
+        // 调度信息保留单独框，已有独立卡片时不重复显示各视频的混合日志。
+        const general = tasks.length ? logs.filter(line => !line.startsWith("[视频 ")) : logs;
+        $("log").hidden=!general.length;
+        updateLogBox($("log"),general);
+        $("taskLogs").hidden=!tasks.length;
+        $("logEmpty").hidden=Boolean(tasks.length || general.length);
     }
 
     async function poll() {
@@ -2100,13 +2573,14 @@
             $("dot").className = `dot ${state.status}`;
             $("waiting").classList.toggle("show", state.status === "waiting_for_user");
             const active = ["starting", "running", "waiting_for_user", "stopping"].includes(state.status);
-            $("start").disabled = active;
+            captureRunning = active;
+            syncPresetControls();
+            $("start").disabled = active || presetBusy;
             $("stop").disabled = !active;
-            $("concurrent").disabled = active;
             $("videoLinks").querySelectorAll("input,button").forEach(el => el.disabled = active);
             $("stop").textContent = state.batch?.items?.length > 1 ? "停止整批" : "停止任务";
             const logs = visibleLogs(state.logs || []);
-            renderLogs(logs);
+            renderTaskLogs(state.task_logs || [], logs);
             if (lastStatus !== state.status && ["succeeded", "stopped"].includes(state.status)) {
                 showNotice(state.message);
                 loadRuns()
@@ -2124,24 +2598,44 @@
     const runPublisher = run => run?.video_publisher_nickname || "作者未知";
     const runVideoTitle = run => run?.video_title || "标题未知";
 
+    const checkedRuns = new Set();
+    let historyRuns = [], historyBusy = false, exportTargets = [];
+    /** 同步多选工具栏，运行中的任务不参与选择，预览与勾选互不影响。 */
+    function syncHistorySelection() {
+        const eligible = historyRuns.filter(run => !run.is_active);
+        for (const name of checkedRuns) {
+            if (!eligible.some(run => run.name === name)) checkedRuns.delete(name);
+        }
+        document.querySelectorAll("#runs .run-check").forEach(input => {
+            input.checked=checkedRuns.has(input.dataset.runName);
+            input.disabled=historyBusy || Boolean(historyRuns.find(run=>run.name===input.dataset.runName)?.is_active);
+        });
+        $("runSelectionCount").textContent=`已选 ${checkedRuns.size} 项`;
+        $("selectAllRuns").checked=eligible.length>0 && checkedRuns.size===eligible.length;
+        $("selectAllRuns").indeterminate=checkedRuns.size>0 && checkedRuns.size<eligible.length;
+        $("selectAllRuns").disabled=historyBusy || !eligible.length;
+        for(const id of ["exportMerged","exportSeparate","deleteRuns"]) $(id).disabled=historyBusy || !checkedRuns.size;
+    }
+    /** 根据实时队列同步历史任务可操作状态，防止勾选后任务开始仍允许操作。 */
     function syncRunActions(batch) {
         const activeNames = new Set((batch?.items || [])
             .filter(item => ["running", "waiting_for_user", "stopping"].includes(item.status))
             .map(item => item.run_name));
-        document.querySelectorAll(".run-item-actions button").forEach(button => {
-            button.disabled = activeNames.has(button.dataset.runName);
-            button.title = button.disabled ? "任务正在采集或停止中，暂不可操作" : button.dataset.actionTitle;
-        });
+        historyRuns.forEach(run => run.is_active=activeNames.has(run.name));
+        syncHistorySelection();
     }
 
+    /** 读取历史任务并保留有效勾选；返回是否成功，供手动刷新决定是否提示。 */
     async function loadRuns() {
         try {
             const runs = await api("/api/runs");
+            historyRuns=runs;
             const box = $("runs");
             box.replaceChildren();
             if (!runs.length) {
                 box.innerHTML = '<div class="empty">还没有采集结果</div>';
-                return
+                syncHistorySelection();
+                return true;
             }
             runs.forEach(run => {
                 const button = document.createElement("button");
@@ -2159,55 +2653,33 @@
                 button.onclick = () => selectRun(run);
                 const row = document.createElement("div");
                 row.className = "run-item";
-                const actions = document.createElement("div");
-                actions.className = "run-item-actions";
-                const exportButton = document.createElement("button");
-                exportButton.type = "button";
-                exportButton.className = "icon-button run-export";
-                exportButton.title = "导出此任务 Excel";
-                exportButton.dataset.actionTitle = exportButton.title;
-                exportButton.dataset.runName = run.name;
-                exportButton.disabled = Boolean(run.is_active);
-                if (exportButton.disabled) exportButton.title = "任务正在采集或停止中，暂不可导出";
-                exportButton.setAttribute("aria-label", `导出 ${runPublisher(run)}-${runVideoTitle(run)}`);
-                exportButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4"/></svg>';
-                exportButton.onclick = () => {
-                    if (exportButton.disabled) return;
-                    location.href = `/api/runs/${encodeURIComponent(run.name)}/excel`
-                };
-                const deleteButton = document.createElement("button");
-                deleteButton.type = "button";
-                deleteButton.className = "icon-button";
-                deleteButton.title = "删除此任务";
-                deleteButton.dataset.actionTitle = deleteButton.title;
-                deleteButton.dataset.runName = run.name;
-                deleteButton.disabled = Boolean(run.is_active);
-                if (deleteButton.disabled) deleteButton.title = "任务正在采集或停止中，暂不可删除";
-                deleteButton.setAttribute("aria-label", `删除 ${runPublisher(run)}-${runVideoTitle(run)}`);
-                deleteButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-.8 14H5.8L5 6m4 4v6m6-6v6"/></svg>';
-                deleteButton.onclick = () => {
-                    if (!deleteButton.disabled) openDeleteDialog(run);
-                };
-                actions.append(exportButton, deleteButton);
-                row.append(button, actions);
+                const check=document.createElement("input");check.type="checkbox";check.className="run-check";check.dataset.runName=run.name;
+                check.setAttribute("aria-label",`选择 ${runPublisher(run)}-${runVideoTitle(run)}`);
+                check.title=run.is_active ? "正在采集的任务不可导出或删除" : "选择此任务";
+                check.onchange=()=>{if(check.checked) checkedRuns.add(run.name);else checkedRuns.delete(run.name);syncHistorySelection();};
+                row.append(check, button);
                 box.append(row)
-            })
+            });
+            syncHistorySelection();
+            return true;
         } catch (error) {
-            showNotice(error.message, true)
+            showNotice(error.message, true);
+            return false;
         }
     }
 
-    function openDeleteDialog(run = selectedRunInfo) {
-        const target = run?.name || selectedRun;
-        if (!target) return;
-        deleteTarget = target;
-        const info = run || {};
-        const box = $('dialogRunName'), primary = document.createElement('div'), id = document.createElement('div');
-        primary.className = 'dialog-run-primary';
-        primary.textContent = `${runPublisher(info)}-${runVideoTitle(info)}`;
-        id.className = 'dialog-run-id';
-        id.textContent = target;
-        box.replaceChildren(primary, id);
+    /** 冻结勾选的删除目标并列出名称，确认前不对结果目录做任何修改。 */
+    function openDeleteDialog() {
+        if(historyBusy) return;
+        deleteTarget=historyRuns.filter(run=>checkedRuns.has(run.name) && !run.is_active).map(run=>({...run}));
+        if(!deleteTarget.length) return;
+        $('dialogTitle').textContent=`删除所选 ${deleteTarget.length} 个任务？`;
+        const box=$('dialogRunName');box.replaceChildren();
+        for(const info of deleteTarget){
+            const primary=document.createElement('div'),id=document.createElement('div');
+            primary.className='dialog-run-primary';primary.textContent=`${runPublisher(info)}-${runVideoTitle(info)}`;
+            id.className='dialog-run-id';id.textContent=info.name;box.append(primary,id);
+        }
         $('dialogError').hidden = true;
         $('dialogError').textContent = '';
         $('deleteDialog').classList.add('show');
@@ -2215,25 +2687,30 @@
         $('cancelDelete').focus()
     }
 
+    /** 关闭删除确认；处理中禁止取消，避免批量删除仍在后台继续。 */
     function closeDeleteDialog() {
+        if(historyBusy) return;
         $('deleteDialog').classList.remove('show');
         $('deleteDialog').setAttribute('aria-hidden', 'true');
         deleteTarget = null;
         (document.querySelector('.run.active') || $('refresh')).focus()
     }
 
+    /** 逐项删除已确认目标，报告部分失败；成功项清理选中及评论预览。 */
     async function deleteRun() {
-        if (!deleteTarget) return;
-        const target = deleteTarget;
+        if (!deleteTarget?.length || historyBusy) return;
+        const targets=deleteTarget.slice(),deleted=[],failed=[];
+        historyBusy=true;syncHistorySelection();
         $('confirmDelete').disabled = true;
+        $('cancelDelete').disabled = true;
         try {
-            await api("/api/runs/delete", {
-                method: "POST",
-                headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({name: target})
-            });
-            closeDeleteDialog();
-            if (selectedRun === target) {
+            for(const target of targets){
+                try{
+                    await api("/api/runs/delete", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:target.name})});
+                    deleted.push(target.name);checkedRuns.delete(target.name);
+                }catch(error){failed.push({run:target,message:error.message});}
+            }
+            if (deleted.includes(selectedRun)) {
                 selectedRun = "";
                 selectedRunInfo = null;
                 allComments = [];
@@ -2242,14 +2719,71 @@
                 $('comments').innerHTML = '<div class="empty">从左侧选择一次采集结果</div>';
                 $('more').hidden = true;
             }
-            showNotice(`已删除 ${target}`);
+            historyBusy=false;
+            if(failed.length){
+                deleteTarget=failed.map(item=>item.run);
+                const box=$('dialogRunName');box.replaceChildren();
+                for(const {run} of failed){
+                    const primary=document.createElement('div'),id=document.createElement('div');
+                    primary.className='dialog-run-primary';primary.textContent=`${runPublisher(run)}-${runVideoTitle(run)}`;
+                    id.className='dialog-run-id';id.textContent=run.name;box.append(primary,id);
+                }
+                $('dialogError').textContent=failed.map(item=>`${item.run.name}：${item.message}`).join('\n');$('dialogError').hidden=false;
+                $('dialogTitle').textContent=`${failed.length} 个任务删除失败，可重试`;
+            }else closeDeleteDialog();
+            if(deleted.length) showNotice(`已删除 ${deleted.length} 个任务的数据目录（不可恢复）`);
             await loadRuns()
         } catch (error) {
             showNotice(error.message, true)
         } finally {
-            $('confirmDelete').disabled = false
+            historyBusy=false;syncHistorySelection();
+            $('confirmDelete').disabled = false;
+            $('cancelDelete').disabled = false;
         }
     }
+
+    /** 下载接口返回的 Excel，读取服务端文件名；非成功响应必须显示错误。 */
+    async function downloadExcel(url, options = {}) {
+        const response=await fetch(url,options);
+        if(!response.ok){const data=await response.json();throw new Error(data.error || '导出失败');}
+        const disposition=response.headers.get('Content-Disposition') || '';
+        const encoded=disposition.match(/filename\*=UTF-8''([^;]+)/i);
+        const filename=encoded ? decodeURIComponent(encoded[1]) : 'comments.xlsx';
+        const blob=await response.blob(),objectUrl=URL.createObjectURL(blob),link=document.createElement('a');
+        link.href=objectUrl;link.download=filename;document.body.append(link);link.click();link.remove();
+        // 浏览器开始下载后再释放链接，避免异步下载读取不到 Blob。
+        setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);
+    }
+    /** 按冻结目标合并导出或逐个下载；失败逐项提示，不使用 ZIP。 */
+    async function exportSelectedRuns(mode){
+        if(historyBusy || !exportTargets.length) return;
+        const targets=exportTargets.slice();historyBusy=true;syncHistorySelection();
+        let succeeded=0;const failures=[];
+        try{
+            if(mode==='merged'){
+                await downloadExcel('/api/runs/export-merged',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({names:targets})});
+                succeeded=targets.length;
+            }else{
+                for(const name of targets){
+                    try{await downloadExcel(`/api/runs/${encodeURIComponent(name)}/excel`);succeeded++;}
+                    catch(error){failures.push(`${name}：${error.message}`);}
+                }
+            }
+            if(succeeded) showNotice(mode==='merged' ? '合并导出已生成' : `已发起 ${succeeded} 个 Excel 下载${targets.length>1 ? '，如被拦截请允许多个文件下载' : ''}`);
+            if(failures.length) showNotice(failures.join('\n'),true);
+        }catch(error){showNotice(error.message,true);}
+        finally{historyBusy=false;exportTargets=[];syncHistorySelection();}
+    }
+    $('selectAllRuns').onchange=()=>{checkedRuns.clear();if($('selectAllRuns').checked) historyRuns.filter(run=>!run.is_active).forEach(run=>checkedRuns.add(run.name));syncHistorySelection();};
+    $('deleteRuns').onclick=openDeleteDialog;
+    /** 标题行导出图标直接采用指定方式，冻结当前勾选，不再询问导出方式。 */
+    function startSelectedExport(mode){
+        if(historyBusy) return;
+        exportTargets=historyRuns.filter(run=>checkedRuns.has(run.name) && !run.is_active).map(run=>run.name);
+        return exportSelectedRuns(mode);
+    }
+    $('exportMerged').onclick=()=>startSelectedExport('merged');
+    $('exportSeparate').onclick=()=>startSelectedExport('separate');
 
     $('confirmDelete').onclick = deleteRun;
     $('cancelDelete').onclick = closeDeleteDialog;
@@ -2258,7 +2792,13 @@
     };
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
-        if ($('imagePreview').classList.contains('show')) closeImagePreview(); else if ($('tabSwitchDialog').classList.contains('show')) closeTabSwitchDialog(); else if ($('deleteDialog').classList.contains('show')) closeDeleteDialog()
+        if ($('bulkChatDialog').classList.contains('show')) closeBulkChatDialog();
+        else if ($('chatDialog').classList.contains('show')) closeChatDialog();
+        else if ($('presetNameDialog').classList.contains('show')) {
+            if (!presetBusy) closePresetNameDialog();
+        } else if ($('presetDeleteDialog').classList.contains('show')) {
+            if (!presetBusy) closePresetDeleteDialog();
+        } else if ($('imagePreview').classList.contains('show')) closeImagePreview(); else if ($('tabSwitchDialog').classList.contains('show')) closeTabSwitchDialog(); else if ($('deleteDialog').classList.contains('show')) closeDeleteDialog()
     });
 
     function openImagePreview(source, alt) {
@@ -2281,8 +2821,8 @@
     };
 
     async function selectRun(run) {
+        if(selectedRun!==run.name) selectedChatUsers.clear();
         selectedRun = run.name;
-        visibleCount = 40;
         $("runTitle").textContent = run.name;
         $("runMeta").textContent = `${run.comment_count} 条评论 · ${run.image_count} 张图片`;
         try {
@@ -2331,16 +2871,216 @@
         return result
     }
 
+    const selectedChatUsers = new Set();
+    let bulkChatState={status:'idle',items:[]},bulkChatTargets=[],bulkChatRun='',bulkChatRequest='',bulkChatSubmitting=false,bulkChatMode='draft';
+    /** 仅判断批次是否仍在处理，不把完成状态当成正在运行。 */
+    function bulkChatRunning(){return ['running','stopping'].includes(bulkChatState.status);}
+    /** 在当前任务内按 sec_uid 取一条代表评论，重复评论不会增加收件人数。 */
+    function selectedChatRecipients(){
+        const users=new Map();
+        for(const comment of allComments){
+            const uid=String(comment.author?.sec_uid || '');
+            if(comment.id && selectedChatUsers.has(uid) && !users.has(uid)) users.set(uid,{comment_id:String(comment.id),sec_uid:uid,nickname:comment.author.nickname || '匿名用户',unique_id:String(comment.author.unique_id || '')});
+        }
+        return [...users.values()];
+    }
+    /** 当前显示范围的全选与去重人数同步，筛选隐藏的已选用户仍在预览中明确展示。 */
+    function syncChatSelection(){
+        const users=selectedChatRecipients(), visible=[...new Set(filtered().filter(c=>c.id && c.author?.sec_uid).map(c=>String(c.author.sec_uid)))];
+        $('chatSelectionCount').textContent=`已选 ${users.length} 位用户`;
+        $('openBulkChat').disabled=!users.length && !bulkChatState.id;
+        $('selectVisibleChatUsers').checked=visible.length>0 && visible.every(uid=>selectedChatUsers.has(uid));
+        $('selectVisibleChatUsers').indeterminate=visible.some(uid=>selectedChatUsers.has(uid)) && !$('selectVisibleChatUsers').checked;
+        $('selectVisibleChatUsers').disabled=bulkChatRunning();
+        document.querySelectorAll('[data-chat-user]').forEach(input=>{input.disabled=bulkChatRunning() || !input.dataset.chatUser || !input.dataset.chatComment;input.checked=selectedChatUsers.has(input.dataset.chatUser);});
+    }
+    /** 按执行状态分类，不把需人工核对的提交当成成功送达。 */
+    function bulkRecipientKind(item){
+        if(item.status==='submitted' && item.page_closed===false)return 'review';
+        return item.status || 'pending';
+    }
+    /** 预览保持名单顺序，执行结果按类型归组；轮询保留折叠状态且安全显示用户文本。 */
+    function renderBulkRecipients(items){
+        const box=$('bulkChatRecipients'),expanded=new Map([...box.querySelectorAll('.bulk-chat-group')].map(group=>[group.dataset.kind,group.open]));
+        box.replaceChildren();
+        const names={running:'处理中',pending:'待发送',submitted:'已提交',review:'需人工核对',skipped:'无法私信（已跳过）',failed:'发送异常',cancelled:'未发送'};
+        const groups=new Map();
+        for(const item of items){const kind=bulkRecipientKind(item);if(!groups.has(kind))groups.set(kind,[]);groups.get(kind).push(item);}
+        // 发送前仅预览收件人，不为尚未执行的名单制造结果分类。
+        const preview=items.every(item=>!item.status);
+        for(const kind of Object.keys(names)){
+            const entries=groups.get(kind);if(!entries?.length)continue;
+            let container=box;
+            if(!preview){
+                const group=document.createElement('details'),summary=document.createElement('summary'),count=document.createElement('span');
+                group.className='bulk-chat-group';group.dataset.kind=kind;
+                // 新分类默认折叠，轮询时保留用户手动展开或收起的状态。
+                group.open=expanded.has(kind)?expanded.get(kind):false;
+                summary.textContent=names[kind];count.textContent=`${entries.length} 人`;summary.append(count);group.append(summary);box.append(group);container=group;
+            }
+            for(const item of entries){
+                const row=document.createElement('div'),title=document.createElement('div'),detail=document.createElement('small');
+                row.className='bulk-chat-recipient';title.textContent=`${item.nickname} · 抖音号：${item.unique_id || '未获取'}`;
+                detail.textContent=item.detail || '';row.append(title,detail);container.append(row);
+            }
+        }
+    }
+    /** 有收件人和内容即可点击批量发送；打开弹窗及填写内容本身不会发送。 */
+    function syncBulkChatControls(){
+        const draft=bulkChatMode==='draft';
+        $('bulkChatCompose').hidden=!draft;$('startBulkChat').hidden=!draft;
+        $('startBulkChat').disabled=bulkChatSubmitting || bulkChatRunning() || !bulkChatTargets.length || !$('bulkChatDraft').value.trim();
+        $('bulkChatDraft').disabled=bulkChatSubmitting;
+        $('stopBulkChat').hidden=!bulkChatRunning();$('stopBulkChat').disabled=bulkChatState.status==='stopping';
+        $('closeBulkChat').disabled=bulkChatSubmitting;
+    }
+    /** 打开预览不发送；已有运行任务时展示该任务，不能用新的选择替换当前发送对象。 */
+    function openBulkChatDialog(){
+        if(chatBusy || bulkChatSubmitting) return;
+        const targets=selectedChatRecipients();
+        if(bulkChatRunning() || (!targets.length && bulkChatState.id)){
+            bulkChatMode='result';renderBulkRecipients(bulkChatState.items);$('bulkChatStatus').textContent=bulkChatState.message || '';
+        }else{
+            if(!targets.length){showNotice('请先勾选评论用户',true);return;}
+            bulkChatTargets=targets;bulkChatRun=selectedRun;bulkChatMode='draft';bulkChatRequest=crypto.randomUUID();
+            renderBulkRecipients(targets);$('bulkChatStatus').textContent='填写统一内容后，点击“批量发送”发送给以上用户。';
+        }
+        $('bulkChatStatus').className='chat-status';syncBulkChatControls();
+        $('bulkChatDialog').classList.add('show');$('bulkChatDialog').setAttribute('aria-hidden','false');
+    }
+    /** 关闭时清空统一消息，但不停止已提交的批次；HTTP 提交期间禁止关闭。 */
+    function closeBulkChatDialog(){
+        if(bulkChatSubmitting)return;
+        // 后台已接收的消息不受影响，仅清理弹窗草稿，避免下次误用旧内容。
+        $('bulkChatDraft').value='';
+        $('bulkChatDialog').classList.remove('show');$('bulkChatDialog').setAttribute('aria-hidden','true');
+        syncBulkChatControls();
+    }
+    /** 用固定请求标识确认启动一次，响应丢失时同一标识重试也不会再建批次。 */
+    async function startBulkChat(){
+        if($('startBulkChat').disabled)return;
+        bulkChatSubmitting=true;syncBulkChatControls();$('bulkChatStatus').textContent='正在提交批量任务…';
+        try{
+            bulkChatState=await api('/api/private-chat/batch/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_name:bulkChatRun,comment_ids:bulkChatTargets.map(u=>u.comment_id),message:$('bulkChatDraft').value,request_id:bulkChatRequest})});
+            bulkChatMode='result';renderBulkRecipients(bulkChatState.items);$('bulkChatStatus').textContent=bulkChatState.message;
+        }catch(error){$('bulkChatStatus').className='chat-status error';$('bulkChatStatus').textContent=`${error.message} 请先查看进度，勿重新建批次重复发送。`;}
+        finally{bulkChatSubmitting=false;syncBulkChatControls();syncChatSelection();syncChatControls();}
+    }
+    /** 请求停止后续用户，当前已开始的提交不自动撤回或重发。 */
+    async function stopBulkChat(){
+        if(!bulkChatRunning())return;
+        $('stopBulkChat').disabled=true;
+        try{bulkChatState=await api('/api/private-chat/batch/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:bulkChatState.id})});$('bulkChatStatus').textContent=bulkChatState.message;}
+        catch(error){showNotice(error.message,true);}
+        finally{syncBulkChatControls();}
+    }
+    /** 只读取任务状态，刷新不重新发送；不重建未提交的收件人预览。 */
+    async function pollBulkChat(){
+        try{
+            bulkChatState=await api('/api/private-chat/batch');
+            if(bulkChatState.id && bulkChatState.request_id===bulkChatRequest) bulkChatMode='result';
+            const items=bulkChatState.items || [], done=items.filter(i=>i.status==='submitted').length;
+            // 仅清空当前批次完全提交后的统一内容，异常或停止时保留用于人工核对。
+            if(bulkChatMode==='result' && bulkChatState.request_id===bulkChatRequest && bulkChatState.status==='completed' && items.length && items.every(i=>i.status==='submitted')) $('bulkChatDraft').value='';
+            $('bulkChatSummary').textContent=bulkChatState.id ? `${bulkChatState.message} · 已提交 ${done}/${items.length}` : '';
+            if(bulkChatMode==='result'){renderBulkRecipients(items);$('bulkChatStatus').textContent=bulkChatState.message || '';}
+            // 请求响应丢失但后台实际已接受时，以固定 request_id 对应的任务结果为准。
+            syncChatSelection();syncBulkChatControls();syncChatControls();
+        }catch{}finally{setTimeout(pollBulkChat,1500);}
+    }
+    $('selectVisibleChatUsers').onchange=()=>{for(const c of filtered()){if(c.id && c.author?.sec_uid){const uid=String(c.author.sec_uid);if($('selectVisibleChatUsers').checked)selectedChatUsers.add(uid);else selectedChatUsers.delete(uid);}}syncChatSelection();};
+    $('openBulkChat').onclick=openBulkChatDialog;$('closeBulkChat').onclick=closeBulkChatDialog;$('startBulkChat').onclick=startBulkChat;$('stopBulkChat').onclick=stopBulkChat;
+    $('bulkChatDraft').oninput=syncBulkChatControls;
+    $('bulkChatDialog').onclick=event=>{if(event.target===$('bulkChatDialog'))closeBulkChatDialog();};
+
+    let chatTarget = null, chatBusy = false, chatToken = null, chatSendAttempted = false;
+    const chatDrafts = new Map();
+    /** 有有效目标和文本即可直接发送；实际发送前自动打开并核验会话。 */
+    function syncChatControls(){
+        $('openChatPage').disabled=chatBusy || bulkChatRunning() || !chatTarget?.sec_uid;
+        $('sendChatMessage').disabled=chatBusy || bulkChatRunning() || chatSendAttempted || !chatTarget?.sec_uid || !$('chatDraft').value.trim();
+        $('closeChat').disabled=chatBusy;
+        $('chatDraft').disabled=chatBusy;
+    }
+    /** 显示固定评论的私聊目标，草稿按用户暂存内存，不影响采集和结果选择。 */
+    function openChatDialog(comment) {
+        if(chatBusy) return;
+        chatToken=null;chatSendAttempted=false;
+        const author=comment.author || {};
+        chatTarget={run_name:selectedRun,comment_id:String(comment.id || ''),sec_uid:String(author.sec_uid || ''),nickname:author.nickname || '匿名用户'};
+        $('chatTitle').textContent=`私聊：${chatTarget.nickname}`;
+        $('chatIdentity').textContent=`抖音号：${String(author.unique_id || '').trim() || '未获取'}\n目标标识：${chatTarget.sec_uid || '缺少 sec_uid'}`;
+        $('chatDraft').value=chatDrafts.get(chatTarget.sec_uid) || '';
+        $('chatStatus').textContent=chatTarget.sec_uid ? '' : '缺少 sec_uid，无法确认目标用户。';
+        $('chatStatus').className='chat-status';
+        syncChatControls();
+        $('chatDialog').classList.add('show');$('chatDialog').setAttribute('aria-hidden','false');$('chatDraft').focus();
+    }
+    /** 关闭私聊弹窗时清空输入与暂存草稿；操作过程中禁止关闭以防目标错配。 */
+    function closeChatDialog(){
+        if(chatBusy) return;
+        // 同时删除暂存内容，避免再次打开同一用户时回显旧消息。
+        if(chatTarget?.sec_uid) chatDrafts.delete(chatTarget.sec_uid);
+        $('chatDraft').value='';
+        $('chatDialog').classList.remove('show');$('chatDialog').setAttribute('aria-hidden','true');chatTarget=null;chatToken=null;
+    }
+    /** 打开入口仅提交任务和评论 ID，不上传消息，不触发发送。 */
+    async function openChatPage(){
+        if(chatBusy || !chatTarget?.sec_uid) return;
+        const target={...chatTarget};chatBusy=true;chatToken=null;syncChatControls();
+        $('chatStatus').className='chat-status';$('chatStatus').textContent='正在独立标签页核对用户并打开私信入口…';
+        try{
+            const result=await api('/api/private-chat/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_name:target.run_name,comment_id:target.comment_id})});
+            chatToken=result.send_ready ? result.chat_token || null : null;
+            chatSendAttempted=false;
+            $('chatStatus').textContent=result.message;
+        }catch(error){$('chatStatus').textContent=error.message;$('chatStatus').className='chat-status error';}
+        finally{chatBusy=false;syncChatControls();}
+    }
+    /** 用户点击才发送一条文本；凭据立即消费，网络异常不重发，失败仍保留草稿。 */
+    async function sendChatMessage(){
+        if(chatBusy || chatSendAttempted || !chatTarget?.sec_uid || !$('chatDraft').value.trim()) return;
+        const target={...chatTarget}, existingToken=chatToken, message=$('chatDraft').value;
+        chatToken=null;chatBusy=true;syncChatControls();
+        $('sendChatMessage').textContent='发送中…';
+        $('chatStatus').className='chat-status';$('chatStatus').textContent='正在核对聊天对象并提交私信，请勿重复发送…';
+        try{
+            let token=existingToken;
+            if(!token){
+                $('chatStatus').textContent='正在自动打开抖音私信并核对目标…';
+                const opened=await api('/api/private-chat/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_name:target.run_name,comment_id:target.comment_id})});
+                if(!opened.send_ready || !opened.chat_token) throw new Error(opened.message || '无法核对聊天对象，未发送');
+                token=opened.chat_token;
+            }
+            // 一旦开始提交，即使网络断开也不能安全补发；需先人工核对并重新打开。
+            chatSendAttempted=true;
+            $('chatStatus').textContent='正在提交私信，请勿重复发送…';
+            const result=await api('/api/private-chat/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_token:token,message})});
+            $('chatStatus').textContent=result.message;
+            // 输入框清空且标签页关闭才视为已确认提交；不确定结果保留草稿供核对。
+            if(result.status==='submitted' && result.page_closed){
+                $('chatDraft').value='';
+                chatDrafts.delete(target.sec_uid);
+            }
+            showNotice('已提交发送操作，请到抖音核对结果');
+        }catch(error){$('chatStatus').textContent=`${error.message} 不会自动重发；请先核对抖音实际结果。`;$('chatStatus').className='chat-status error';}
+        finally{chatBusy=false;$('sendChatMessage').textContent='发送私信';syncChatControls();}
+    }
+    $('chatDraft').addEventListener('input',()=>{if(chatTarget?.sec_uid) chatDrafts.set(chatTarget.sec_uid,$('chatDraft').value);syncChatControls();});
+    $('closeChat').onclick=closeChatDialog;$('openChatPage').onclick=openChatPage;$('sendChatMessage').onclick=sendChatMessage;
+    $('chatDialog').onclick=event=>{if(event.target===$('chatDialog')) closeChatDialog();};
+
+    /** 一次渲染筛选后的全部评论，图片仍懒加载，私聊图标跟随对应昵称。 */
     function renderComments() {
+        syncChatSelection();
         $("historyAdvancedLabel").textContent = $("commentAfter").value ? "高级筛选（时间筛选已启用）" : "高级筛选";
         const result = filtered(), box = $("comments");
         box.replaceChildren();
         if (!result.length) {
             box.innerHTML = '<div class="empty">没有符合条件的评论</div>';
-            $("more").hidden = true;
             return
         }
-        result.slice(0, visibleCount).forEach(comment => {
+        result.forEach(comment => {
             const card = document.createElement("article");
             card.className = "comment";
             if ((comment.level || 1) > 1) card.style.marginLeft = `${Math.min(36, ((comment.level || 2) - 1) * 18)}px`;
@@ -2350,7 +3090,20 @@
             author.textContent = `${(comment.level || 1) > 1 ? `↳ ${comment.level}级回复 · ` : ""}${comment.author?.nickname || "匿名用户"}`;
             const place = document.createElement("span");
             place.textContent = [formatCommentTime(comment), comment.ip_label].filter(Boolean).join(" · ");
-            head.append(author, place);
+            const actions=document.createElement('div'),chat=document.createElement('button');
+            actions.className='comment-head-actions';chat.type='button';chat.className='icon-button comment-chat';
+            chat.title=comment.author?.sec_uid ? '私聊此用户（不自动发送）' : '缺少 sec_uid，无法定位用户';
+            chat.setAttribute('aria-label',`私聊 ${comment.author?.nickname || '匿名用户'}`);
+            chat.disabled=!comment.author?.sec_uid;
+            chat.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 2v-10a8.5 8.5 0 0 1 8.5-8.5h3a8.5 8.5 0 0 1 8.5 8.5Z"/><path d="M7 11h8M7 15h5"/></svg>';
+            const authorBox=document.createElement('div'),selectUser=document.createElement('input');
+            authorBox.className='comment-author-selection';selectUser.type='checkbox';selectUser.className='run-check';
+            selectUser.dataset.chatUser=String(comment.author?.sec_uid || '');selectUser.checked=selectedChatUsers.has(selectUser.dataset.chatUser);
+            selectUser.dataset.chatComment=String(comment.id || '');
+            selectUser.disabled=bulkChatRunning() || !comment.id || !selectUser.dataset.chatUser;selectUser.setAttribute('aria-label',`选择私信用户 ${comment.author?.nickname || '匿名用户'}`);
+            selectUser.onchange=()=>{if(selectUser.checked)selectedChatUsers.add(selectUser.dataset.chatUser);else selectedChatUsers.delete(selectUser.dataset.chatUser);syncChatSelection();};
+            authorBox.append(selectUser,author,chat);
+            chat.onclick=()=>openChatDialog(comment);actions.append(place);head.append(authorBox,actions);
             const account = document.createElement("div");
             account.className = "comment-account";
             account.textContent = `抖音号：${String(comment.author?.unique_id || "").trim() || "未获取"}`;
@@ -2377,30 +3130,33 @@
             }
             box.append(card)
         });
-        $("more").hidden = visibleCount >= result.length;
-        $("more").textContent = `加载更多（还有 ${Math.max(0, result.length - visibleCount)} 条）`
     }
 
     ["search", "sort", "commentAfter"].forEach(id => $(id).addEventListener(["search", "commentAfter"].includes(id) ? "input" : "change", () => {
-        visibleCount = 40;
         renderComments()
     }));
     $("clear").onclick = () => {
         $("search").value = "";
         $("sort").value = "source";
         $("commentAfter").value = "";
-        visibleCount = 40;
         renderComments()
     };
-    $("more").onclick = () => {
-        visibleCount += 40;
-        renderComments()
-    };
-    $("refresh").onclick = loadRuns;
+    /** 手动刷新成功时滑出提示，等待期间禁用按钮，自动刷新不打扰用户。 */
+    async function refreshHistoryRuns() {
+        if ($("refresh").disabled) return;
+        $("refresh").disabled = true;
+        try {
+            if (await loadRuns()) showNotice("刷新成功");
+        } finally {
+            $("refresh").disabled = false;
+        }
+    }
+    $("refresh").onclick = refreshHistoryRuns;
 
     async function initializePage() {
         await loadXpathSettings();
         await loadCaptureSettings();
+        await loadCapturePresets();
         let previousLogs = [];
         try {
             const state = await api("/api/status");
@@ -2438,15 +3194,10 @@
         $("log").textContent = "暂无运行日志";
         centerSelectArrows();
         poll();
+        pollBulkChat();
         loadRuns()
     }
 
-    const captureCard=document.querySelector(".capture-card"),logCard=document.querySelector(".log-card");
-    function syncLogHeight(){const height=captureCard.getBoundingClientRect().height;if(height>0)logCard.style.height=`${height}px`}
-    const captureSizeObserver=new ResizeObserver(syncLogHeight);
-    captureSizeObserver.observe(captureCard);
-    window.addEventListener("resize",syncLogHeight);
-    syncLogHeight();
     initializePage();
 </script>
 </body>
