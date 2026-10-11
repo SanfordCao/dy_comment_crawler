@@ -21,6 +21,7 @@ import shutil
 import sys
 import traceback
 import webbrowser
+from offline_license import LicenseManager
 
 try:
     from .crawler import CrawlerConfig, crawl_douyin_comments
@@ -973,10 +974,37 @@ class ConsoleState:
 
 
 class ConsoleServer(ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], state: ConsoleState) -> None:
-        """创建基础版工作台服务，不加载授权模块或密钥。"""
+    def __init__(self, address: tuple[str, int], state: ConsoleState, manager: LicenseManager) -> None:
+        """服务统一持有授权管理器，运行中到期或取时失败立即禁止新操作。"""
         super().__init__(address, ConsoleRequestHandler)
         self.state = state
+        self.license_manager = manager
+        self.license_failure = ""
+        self.license_stop = Event()
+        self.license_thread = Thread(target=self._watch_license, name="license-watch", daemon=True)
+
+    def serve_forever(self, poll_interval: float = 0.5) -> None:
+        """进入服务循环时才开启监测，避免启动失败后监测卡在 shutdown。"""
+        self.license_thread.start()
+        super().serve_forever(poll_interval)
+
+    def _watch_license(self) -> None:
+        """每两秒校验期限，网络时钟内部每五分钟刷新；失败走正常退出清理。"""
+        while not self.license_stop.wait(2):
+            try:
+                self.license_manager.require()
+            except (ValueError, OSError) as error:
+                self.license_failure = str(error)
+                # shutdown 在独立监测线程调用，主线程执行完整停止与资源清理。
+                self.shutdown()
+                return
+
+    def server_close(self) -> None:
+        """停止监测后释放服务端口，重复关闭不保留后台线程。"""
+        self.license_stop.set()
+        if self.license_thread.ident is not None:
+            self.license_thread.join(timeout=32)
+        super().server_close()
 
 
 class ConsoleRequestHandler(BaseHTTPRequestHandler):
@@ -1020,6 +1048,8 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         """读取工作台页面、任务状态及采集结果。"""
+        if not self._check_license():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         try:
@@ -1100,6 +1130,8 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         """处理工作台操作，保留各接口原有的参数及跨站校验。"""
+        if not self._check_license():
+            return
         try:
             if self.path in {"/api/private-chat/batch/start", "/api/private-chat/batch/stop"}:
                 origin = self.headers.get("Origin")
@@ -1194,6 +1226,18 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
             self._json(400, {"error": str(error)})
 
 
+    def _check_license(self) -> bool:
+        """所有页面/API 都校验授权，失效时返回明确错误而不是继续操作。"""
+        try:
+            if self.server.license_failure:
+                raise ValueError(self.server.license_failure)
+            self.server.license_manager.require()
+            return True
+        except (ValueError, OSError) as error:
+            self._json(403, {"error": f"{error}；请重新启动并验证授权。"})
+            return False
+
+
 def workbench_data_dir() -> Path:
     """返回 EXE 的持久化目录，避免数据写入单文件包的临时解压目录。"""
     if sys.platform == "win32":
@@ -1207,10 +1251,13 @@ def create_console_server(
     host: str = "127.0.0.1",
     port: int = 8765,
     project_root: Path | None = None,
+    license_manager: LicenseManager | None = None,
 ) -> ConsoleServer:
-    """直接创建基础版服务；源码使用项目目录，EXE 使用用户可写目录。"""
+    """先验证签名和网络期限，再创建服务；源码与 EXE 使用相同认证规则。"""
+    manager = license_manager or LicenseManager()
+    manager.require()
     root = project_root or (workbench_data_dir() if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1])
-    return ConsoleServer((host, port), ConsoleState(root))
+    return ConsoleServer((host, port), ConsoleState(root), manager)
 
 
 def build_parser() -> ArgumentParser:
@@ -1233,15 +1280,19 @@ def main() -> None:
             if not instance.is_primary:
                 instance.activate_existing()
                 return
-        _run_workbench(args, instance)
+        from activation_window import ensure_activation
+        manager = LicenseManager()
+        if not ensure_activation(manager):
+            return
+        _run_workbench(args, instance, manager)
     finally:
         if instance is not None:
             instance.close()
 
 
-def _run_workbench(args: Any, instance: Any = None) -> None:
+def _run_workbench(args: Any, instance: Any = None, manager: LicenseManager | None = None) -> None:
     """运行唯一工作台实例，退出时清理任务、浏览器和托盘。"""
-    server = create_console_server(args.host, args.port)
+    server = create_console_server(args.host, args.port, license_manager=manager)
     url = f"http://{args.host}:{server.server_address[1]}/"
     tray = None
     try:
