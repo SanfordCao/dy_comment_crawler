@@ -1223,10 +1223,15 @@ def main() -> None:
     args = build_parser().parse_args()
     server = create_console_server(args.host, args.port)
     url = f"http://{args.host}:{server.server_address[1]}/"
-    print(f"抖音评论工具已启动：{url}")
-    if not args.no_open:
-        webbrowser.open(url)
+    tray = None
     try:
+        if sys.platform == "win32" and getattr(sys, "frozen", False):
+            from desktop_tray import WorkbenchTray
+            tray = WorkbenchTray(url, server.shutdown)
+            tray.start()
+        print(f"抖音评论工具已启动：{url}")
+        if not args.no_open:
+            webbrowser.open(url)
         server.serve_forever()
     except KeyboardInterrupt:
         pass
@@ -1240,7 +1245,11 @@ def main() -> None:
         try:
             server.state.browser_session.close()
         finally:
-            server.server_close()
+            try:
+                server.server_close()
+            finally:
+                if tray is not None:
+                    tray.stop()
 
 
 if __name__ == "__main__":

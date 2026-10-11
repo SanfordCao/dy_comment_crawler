@@ -16,7 +16,7 @@ for name in ('web_console_settings.json', 'capture_settings.json', 'capture_pres
     datas.append((str(config), 'config'))
 # 显式排除预留的授权代码，避免开发环境安装的可选依赖进入基础发行包。
 a = Analysis([str(root / 'src' / 'web_console.py')], pathex=[str(root / 'src')],
-             binaries=[], datas=datas, hiddenimports=[], hookspath=[], hooksconfig={}, runtime_hooks=[],
+             binaries=[], datas=datas, hiddenimports=['pystray._win32'], hookspath=[], hooksconfig={}, runtime_hooks=[],
              excludes=['activation_window', 'offline_license', 'license_issuer',
                        'customtkinter', 'cryptography'], noarchive=False)
 pyz = PYZ(a.pure)
