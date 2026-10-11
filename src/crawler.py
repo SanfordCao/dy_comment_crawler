@@ -687,6 +687,19 @@ async def _click_configured_xpath(
         return False
 
 
+async def _current_viewport(page: Page) -> dict[str, int] | None:
+    """读取当前实际页面尺寸，兼容无固定视口及用户随时调整窗口。"""
+    try:
+        # no_viewport 模式的 page.viewport_size 为 None，不能据此跳过滚动。
+        size = await page.evaluate("() => ({width: window.innerWidth, height: window.innerHeight})")
+        width, height = int(size["width"]), int(size["height"])
+        if width > 0 and height > 0:
+            return {"width": width, "height": height}
+    except Exception as error:
+        print(f"[评论滚动] 读取实际视口失败：{error}")
+    return None
+
+
 async def _scroll_comment_panel(
     page: Page,
     config: CrawlerConfig,
@@ -698,7 +711,7 @@ async def _scroll_comment_panel(
         if config.scroll_direction == "up"
         else abs(config.scroll_pixels)
     )
-    viewport = page.viewport_size
+    viewport = await _current_viewport(page)
     if not viewport:
         print("[评论滚动] 无法读取浏览器视口大小，本轮跳过")
         return False
@@ -792,7 +805,8 @@ async def _scroll_comment_panel(
 
 
 async def _reset_comment_panel_to_top(page: Page) -> bool:
-    viewport = page.viewport_size
+    """按当前窗口尺寸定位评论容器，回到顶部以继续展开回复。"""
+    viewport = await _current_viewport(page)
     if not viewport:
         return False
     result = await page.evaluate(
@@ -1527,6 +1541,8 @@ async def crawl_douyin_comments(
                 user_data_dir=str(config.profile_dir),
                 channel="chrome",
                 headless=False,
+                # 独立启动也跟随真实窗口，不与网页共享启动路径产生尺寸差异。
+                no_viewport=True,
             )
             owned_context = True
             if context.pages and context.pages[0].url == "about:blank":

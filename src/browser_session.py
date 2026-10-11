@@ -60,7 +60,9 @@ class BrowserSession:
             self._playwright = await async_playwright().start()
             try:
                 context = await self._playwright.chromium.launch_persistent_context(
-                    user_data_dir=str(self.profile_dir), channel="chrome", headless=False, timeout=30000)
+                    user_data_dir=str(self.profile_dir), channel="chrome", headless=False,
+                    # 不模拟固定分辨率，让最大化、缩放和不同屏幕自然改变页面视口。
+                    no_viewport=True, timeout=30000)
             except Exception as error:
                 raise RuntimeError("无法打开采集浏览器，请确认已安装 Chrome，且用户目录未被其他程序占用") from error
             self._context = context
