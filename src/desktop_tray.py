@@ -117,10 +117,9 @@ class WorkbenchTray:
             from activation_window import authorization_expiry_text
 
             expires = authorization_expiry_text(payload)
-            customer = str(payload.get("customer") or "未填写")[:80]
             license_id = str(payload.get("license_id") or "未填写")[:80]
             if not self.exiting.is_set():
-                show_license_dialog("授权信息", f"授权状态：有效\n授权用户：{customer}\n授权编号：{license_id}\n\n有效期截止（北京时间）：{expires}\n该时刻起授权失效。")
+                show_license_dialog("授权信息", f"授权状态：有效\n授权编号：{license_id}\n\n有效期截止（北京时间）：{expires}\n该时刻起授权失效。")
         except (ValueError, OSError) as error:
             if not self.exiting.is_set():
                 show_license_dialog("授权验证失败", f"{error}\n\n请重新启动程序并输入有效授权码。", error=True)

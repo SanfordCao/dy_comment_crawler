@@ -19,7 +19,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 PRODUCT = "douyin-comment-crawler"
 DEVICE_PATTERN = r"DY1-(?:[A-F0-9]{8}-){7}[A-F0-9]{8}"
-LICENSE_CODE_PREFIX = "DYLIC1-"
+LICENSE_SCHEMA_VERSION = 2
+LICENSE_CODE_PREFIX = "DYLIC2-"
 
 
 class LicenseError(ValueError):
@@ -55,7 +56,7 @@ def decode_license_code(code: str) -> dict[str, Any]:
         raise LicenseError("授权码为空或过长，请复制完整授权码")
     compact = "".join(code.split())
     if not compact.startswith(LICENSE_CODE_PREFIX):
-        raise LicenseError("授权码格式无效，请粘贴 DYLIC1- 开头的完整授权码")
+        raise LicenseError("授权码格式无效，请粘贴 DYLIC2- 开头的完整授权码")
     encoded = compact[len(LICENSE_CODE_PREFIX):]
     if not encoded or not re.fullmatch(r"[A-Za-z0-9_-]+", encoded):
         raise LicenseError("授权码编码无效，请重新复制")
@@ -110,12 +111,12 @@ def verify_license(data: dict[str, Any], public_pem: bytes, code: str, now: date
         key.verify(signature, canonical_json(payload))
     except (InvalidSignature, ValueError, TypeError, KeyError) as error:
         raise LicenseError("授权签名无效或文件被修改，请联系管理员") from error
-    if payload.get("product") != PRODUCT or type(payload.get("schema_version")) is not int or payload["schema_version"] != 1:
+    if payload.get("product") != PRODUCT or type(payload.get("schema_version")) is not int or payload["schema_version"] != LICENSE_SCHEMA_VERSION:
         raise LicenseError("授权产品或版本不匹配")
     if not re.fullmatch(DEVICE_PATTERN, code) or payload.get("device_code") != code:
         raise LicenseError("授权文件不属于当前设备")
-    if not all(isinstance(payload.get(field), str) and payload[field].strip() for field in ("license_id", "customer")):
-        raise LicenseError("授权编号或客户信息缺失")
+    if not isinstance(payload.get("license_id"), str) or not payload["license_id"].strip():
+        raise LicenseError("授权编号缺失")
     start, end = utc_time(payload.get("issued_at")), utc_time(payload.get("expires_at"))
     if end <= start:
         raise LicenseError("授权期限无效")
@@ -127,11 +128,11 @@ def verify_license(data: dict[str, Any], public_pem: bytes, code: str, now: date
 
 
 def user_data_dir() -> Path:
-    """授权保存在 EXE 同级目录；源码运行时保存在项目根目录。"""
+    """授权保存在 EXE 同级 licensing 文件夹；源码运行时位于项目根目录下。"""
     if getattr(sys, "frozen", False):
         # 单文件 EXE 的 __file__ 指向临时解压目录，必须使用实际启动文件位置。
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parents[1]
+        return Path(sys.executable).resolve().parent / "licensing"
+    return Path(__file__).resolve().parents[1] / "licensing"
 
 
 def public_key_path() -> Path:
@@ -215,5 +216,5 @@ class LicenseManager:
                 # 完整验签后才落盘，不把无效授权替换到运行目录中。
                 atomic_json(self.data_dir / "license.lic", data)
             except OSError as error:
-                raise LicenseError("无法保存 license.lic：请将程序放到有写入权限的目录后重新导入授权") from error
+                raise LicenseError("无法保存 licensing/license.lic：请将程序放到有写入权限的目录后重新输入授权码") from error
             return payload

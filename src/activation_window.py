@@ -280,10 +280,9 @@ def ensure_activation(manager: LicenseManager) -> bool:
                 self.destroy()
             else:
                 # 限制未验证文件中的文本长度，避免异常内容撑破窗口布局。
-                owner = str(payload.get("customer") or "未填写")[:80]
                 expires = authorization_expiry_text(payload)
                 license_id = str(payload.get("license_id") or "未填写")[:80]
-                self.preview.configure(text=f"客户：{owner}\n授权编号：{license_id}\n到期时间（北京时间）：{expires}")
+                self.preview.configure(text=f"授权编号：{license_id}\n到期时间（北京时间）：{expires}")
                 self.badge.configure(text="授权有效", fg_color="#E7F5ED", text_color="#12796C")
                 self.enter_button.configure(state="normal")
                 self._notice("授权验证通过并已保存，点击进入工作台。")
