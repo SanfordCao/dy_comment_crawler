@@ -9,17 +9,12 @@ class WorkbenchTray:
     def __init__(self, url: str, shutdown: Callable[[], None]) -> None:
         """创建托盘菜单，延迟导入桌面依赖以保持源码跨平台启动。"""
         import pystray
-        from PIL import Image, ImageDraw
+        from app_icon import create_app_icon
 
         self.url = url
         self.shutdown = shutdown
         self.exiting = Event()
-        # 直接绘制简单图标，无需额外图标文件或授权界面资源。
-        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-        draw.rounded_rectangle((4, 4, 60, 60), radius=14, fill="#12796C")
-        draw.rounded_rectangle((15, 16, 49, 42), radius=6, fill="white")
-        draw.polygon([(20, 39), (20, 51), (33, 39)], fill="white")
+        image = create_app_icon(64)
         self.icon = pystray.Icon(
             "douyin-workbench", image, "抖音评论工作台",
             menu=pystray.Menu(

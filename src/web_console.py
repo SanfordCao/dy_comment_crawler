@@ -791,9 +791,12 @@ class ConsoleState:
             self._refresh_running_status_locked()
             self._save_batch_locked()
 
-    def stop(self) -> None:
+    def stop(self, *, require_running: bool = True) -> None:
+        """请求停止采集；退出清理允许空闲，网页停止操作仍提示无运行任务。"""
         with self.lock:
             if not self.worker or not self.worker.is_alive():
+                if not require_running:
+                    return
                 raise RuntimeError("当前没有正在运行的任务")
             self.stop_event.set()
             self.batch["status"] = "stopping"
@@ -1236,20 +1239,23 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        server.state.stop()
-        server.state.private_chat_batch.stop()
-        if server.state.private_chat_batch.worker is not None:
-            server.state.private_chat_batch.worker.join(timeout=5)
-        if server.state.worker is not None:
-            server.state.worker.join(timeout=5)
         try:
-            server.state.browser_session.close()
+            # 退出不是页面的停止按钮；空闲和任务刚结束都是正常状态。
+            server.state.stop(require_running=False)
+            server.state.private_chat_batch.stop()
+            if server.state.private_chat_batch.worker is not None:
+                server.state.private_chat_batch.worker.join(timeout=5)
+            if server.state.worker is not None:
+                server.state.worker.join(timeout=5)
         finally:
             try:
-                server.server_close()
+                server.state.browser_session.close()
             finally:
-                if tray is not None:
-                    tray.stop()
+                try:
+                    server.server_close()
+                finally:
+                    if tray is not None:
+                        tray.stop()
 
 
 if __name__ == "__main__":
