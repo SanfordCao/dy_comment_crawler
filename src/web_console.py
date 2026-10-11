@@ -46,6 +46,31 @@ CAPTURE_DEFAULTS = {
     "concurrency_limit": 2,
 }
 
+PACKAGED_CONFIG_FILES = (
+    "web_console_settings.json", "capture_settings.json", "capture_presets.json",
+)
+
+
+def initialize_packaged_config(project_root: Path) -> None:
+    """将 EXE 内默认配置补齐到用户目录，已有配置始终保留。"""
+    if not getattr(sys, "frozen", False):
+        return
+    source = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "config"
+    destination = project_root / "src" / "config"
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in PACKAGED_CONFIG_FILES:
+        target = destination / name
+        if target.exists():
+            continue
+        # 白名单仅含持久化设置，不恢复开发机器的任务或授权状态。
+        data = (source / name).read_bytes()
+        try:
+            with target.open("xb") as stream:
+                stream.write(data)
+        except FileExistsError:
+            # 两个进程同时启动时，另一进程已初始化的文件也不能覆盖。
+            continue
+
 
 def load_console_html() -> bytes:
     return Path(__file__).with_name("web_console.html").read_bytes()
@@ -97,7 +122,9 @@ class _TaskStdout(TextIOBase):
 
 class ConsoleState:
     def __init__(self, project_root: Path) -> None:
+        """初始化工作台状态，先补齐发行配置再读取用户设置。"""
         self.project_root = project_root.resolve()
+        initialize_packaged_config(self.project_root)
         self.output_root = self.project_root / "output"
         self.profile_dir = self.project_root / ".douyin-browser-profile"
         self.browser_session = BrowserSession(self.profile_dir)
