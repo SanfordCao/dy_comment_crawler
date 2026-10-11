@@ -15,6 +15,7 @@ from uuid import uuid4
 import asyncio
 import json
 import mimetypes
+import os
 import re
 import shutil
 import sys
@@ -943,6 +944,7 @@ class ConsoleState:
 
 class ConsoleServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], state: ConsoleState) -> None:
+        """创建基础版工作台服务，不加载授权模块或密钥。"""
         super().__init__(address, ConsoleRequestHandler)
         self.state = state
 
@@ -987,6 +989,7 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         return payload
 
     def do_GET(self) -> None:
+        """读取工作台页面、任务状态及采集结果。"""
         parsed = urlparse(self.path)
         path = parsed.path
         try:
@@ -1066,6 +1069,7 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
             self._json(400, {"error": str(error)})
 
     def do_POST(self) -> None:
+        """处理工作台操作，保留各接口原有的参数及跨站校验。"""
         try:
             if self.path in {"/api/private-chat/batch/start", "/api/private-chat/batch/stop"}:
                 origin = self.headers.get("Origin")
@@ -1160,12 +1164,22 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
             self._json(400, {"error": str(error)})
 
 
+def workbench_data_dir() -> Path:
+    """返回 EXE 的持久化目录，避免数据写入单文件包的临时解压目录。"""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    else:
+        base = Path.home() / "Library" / "Application Support"
+    return base / "DouyinCommentWorkbench"
+
+
 def create_console_server(
     host: str = "127.0.0.1",
     port: int = 8765,
     project_root: Path | None = None,
 ) -> ConsoleServer:
-    root = project_root or Path(__file__).resolve().parents[1]
+    """直接创建基础版服务；源码使用项目目录，EXE 使用用户可写目录。"""
+    root = project_root or (workbench_data_dir() if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1])
     return ConsoleServer((host, port), ConsoleState(root))
 
 
@@ -1178,7 +1192,7 @@ def build_parser() -> ArgumentParser:
 
 
 def main() -> None:
-    """启动本机控制台，退出时停止采集并清理共享浏览器资源。"""
+    """直接打开网页工作台，退出时清理任务及共享浏览器。"""
     args = build_parser().parse_args()
     server = create_console_server(args.host, args.port)
     url = f"http://{args.host}:{server.server_address[1]}/"
