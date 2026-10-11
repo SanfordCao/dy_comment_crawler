@@ -52,12 +52,17 @@ PACKAGED_CONFIG_FILES = (
 )
 
 
+def console_config_dir(project_root: Path) -> Path:
+    """发行版使用 EXE 同级 config，源码版保留 src/config 的开发布局。"""
+    return project_root / "config" if getattr(sys, "frozen", False) else project_root / "src" / "config"
+
+
 def initialize_packaged_config(project_root: Path) -> None:
-    """将 EXE 内默认配置补齐到用户目录，已有配置始终保留。"""
+    """将包内默认配置补齐到 EXE 同级目录，已有配置始终保留。"""
     if not getattr(sys, "frozen", False):
         return
     source = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "config"
-    destination = project_root / "src" / "config"
+    destination = console_config_dir(project_root)
     destination.mkdir(parents=True, exist_ok=True)
     for name in PACKAGED_CONFIG_FILES:
         target = destination / name
@@ -122,18 +127,21 @@ class _TaskStdout(TextIOBase):
 
 
 class ConsoleState:
-    def __init__(self, project_root: Path) -> None:
-        """初始化工作台状态，先补齐发行配置再读取用户设置。"""
+    def __init__(self, project_root: Path, output_base: Path | None = None) -> None:
+        """初始化工作台，采集输出可与配置目录分开保存。"""
         self.project_root = project_root.resolve()
         self.capture_authorization: Callable[[], dict] | None = None
         initialize_packaged_config(self.project_root)
-        self.output_root = self.project_root / "output"
+        # EXE 的结果放在程序旁，不能跟随配置写到 AppData 或临时解包目录。
+        self.output_base = (output_base or self.project_root).resolve()
+        self.output_root = self.output_base / "output"
+        self.output_root.mkdir(parents=True, exist_ok=True)
         self.profile_dir = self.project_root / ".douyin-browser-profile"
         self.browser_session = BrowserSession(self.profile_dir)
         self.chat_lock = Lock()
         self.private_chat_session: dict[str, Any] | None = None
         self.private_chat_batch = PrivateChatBatch(self.browser_session, self.chat_lock)
-        self.settings_path = self.project_root / "src" / "config" / "web_console_settings.json"
+        self.settings_path = console_config_dir(self.project_root) / "web_console_settings.json"
         legacy_settings_path = self.project_root / "web_console_settings.json"
         self.xpath_settings = {
             "pause_xpath": "",
@@ -175,7 +183,7 @@ class ConsoleState:
         self.worker: Thread | None = None
         self.stop_event = Event()
         self.task_controls: dict[str, dict[str, Any]] = {}
-        self.batch_path = self.project_root / "src" / "config" / "batch_state.json"
+        self.batch_path = console_config_dir(self.project_root) / "batch_state.json"
         self.capture_settings_path = self.settings_path.with_name("capture_settings.json")
         self.capture_settings = dict(CAPTURE_DEFAULTS)
         try:
@@ -835,7 +843,7 @@ class ConsoleState:
                 raise FileNotFoundError("结果目录不存在")
             if (
                 self.output_root.is_symlink()
-                or self.output_root.resolve().parent != self.project_root
+                or self.output_root.resolve().parent != self.output_base
             ):
                 raise ValueError("结果根目录位置异常，拒绝删除")
             candidate = self.output_root / name
@@ -1283,12 +1291,10 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
 
 
 def workbench_data_dir() -> Path:
-    """返回 EXE 的持久化目录，避免数据写入单文件包的临时解压目录。"""
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    else:
-        base = Path.home() / "Library" / "Application Support"
-    return base / "DouyinCommentWorkbench"
+    """使用程序所在目录，不受启动工作目录和单文件解包目录影响。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[1]
 
 
 def create_console_server(
@@ -1300,8 +1306,9 @@ def create_console_server(
     """先验证签名和网络期限，再创建服务；源码与 EXE 使用相同认证规则。"""
     manager = license_manager or LicenseManager()
     manager.require()
-    root = project_root or (workbench_data_dir() if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1])
-    return ConsoleServer((host, port), ConsoleState(root), manager)
+    root = project_root or workbench_data_dir()
+    # 显式指定项目目录时仍使用该目录，方便测试和定制部署。
+    return ConsoleServer((host, port), ConsoleState(root, output_base=root), manager)
 
 
 def build_parser() -> ArgumentParser:
