@@ -1222,8 +1222,25 @@ def build_parser() -> ArgumentParser:
 
 
 def main() -> None:
-    """直接打开网页工作台，退出时清理任务及共享浏览器。"""
+    """Windows EXE 只允许单实例，重复启动仅唤起已有工作台。"""
     args = build_parser().parse_args()
+    instance = None
+    try:
+        if sys.platform == "win32" and getattr(sys, "frozen", False):
+            from single_instance import WindowsSingleInstance
+            # 必须在创建服务、浏览器状态和托盘之前拦截重复启动。
+            instance = WindowsSingleInstance()
+            if not instance.is_primary:
+                instance.activate_existing()
+                return
+        _run_workbench(args, instance)
+    finally:
+        if instance is not None:
+            instance.close()
+
+
+def _run_workbench(args: Any, instance: Any = None) -> None:
+    """运行唯一工作台实例，退出时清理任务、浏览器和托盘。"""
     server = create_console_server(args.host, args.port)
     url = f"http://{args.host}:{server.server_address[1]}/"
     tray = None
@@ -1232,6 +1249,9 @@ def main() -> None:
             from desktop_tray import WorkbenchTray
             tray = WorkbenchTray(url, server.shutdown)
             tray.start()
+        if instance is not None:
+            # 回调持有首个进程的真实 URL，即使使用自定义端口也不会打开错误地址。
+            instance.listen(lambda: webbrowser.open(url))
         print(f"抖音评论工具已启动：{url}")
         if not args.no_open:
             webbrowser.open(url)
