@@ -140,7 +140,10 @@ class ConsoleState:
         self.browser_session = BrowserSession(self.profile_dir)
         self.chat_lock = Lock()
         self.private_chat_session: dict[str, Any] | None = None
-        self.private_chat_batch = PrivateChatBatch(self.browser_session, self.chat_lock)
+        self.private_chat_batch = PrivateChatBatch(
+            self.browser_session, self.chat_lock,
+            private_chat_xpath=lambda: self.get_xpath_settings().get("private_chat_xpath", ""),
+        )
         self.settings_path = console_config_dir(self.project_root) / "web_console_settings.json"
         legacy_settings_path = self.project_root / "web_console_settings.json"
         self.xpath_settings = {
@@ -152,6 +155,7 @@ class ConsoleState:
             "author_xpath": "",
             "title_xpath": "",
             "comment_xpath": "",
+            "private_chat_xpath": "",
         }
         settings_source = (
             self.settings_path
@@ -433,8 +437,9 @@ class ConsoleState:
             return dict(self.xpath_settings)
 
     def save_xpath_settings(self, payload: dict[str, Any]) -> dict[str, str]:
+        """验证并持久化全局 XPath，采集和私信均从此配置读取。"""
         settings: dict[str, str] = {}
-        for key in ("pause_xpath", "detail_xpath", "author_xpath", "title_xpath", "comment_xpath"):
+        for key in ("pause_xpath", "detail_xpath", "author_xpath", "title_xpath", "comment_xpath", "private_chat_xpath"):
             value = payload.get(key, "")
             if not isinstance(value, str) or len(value) > 4_096:
                 raise ValueError(f"{key} 必须是 4096 字符以内的 XPath 文本")
@@ -883,7 +888,10 @@ class ConsoleState:
                                          "token": uuid4().hex, "used": False}
 
         try:
-            result = await asyncio.wait_for(open_user_chat(context, author, remember_chat), timeout=60)
+            result = await asyncio.wait_for(open_user_chat(
+                context, author, remember_chat,
+                private_chat_xpath=self.get_xpath_settings().get("private_chat_xpath", ""),
+            ), timeout=60)
             if self.private_chat_session:
                 result["chat_token"] = self.private_chat_session["token"]
             return result

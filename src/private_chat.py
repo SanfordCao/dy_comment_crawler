@@ -74,9 +74,13 @@ async def check_chat_blockers(page: Any) -> None:
 
 
 async def open_user_chat(context: Any, author: dict[str, Any],
-                         on_ready: Callable[[Any, str], None] | None = None) -> dict[str, Any]:
+                         on_ready: Callable[[Any, str], None] | None = None,
+                         private_chat_xpath: str = "") -> dict[str, Any]:
     """以 sec_uid 核对主页身份并确认私信界面出现，不以昵称作为身份依据。"""
     sec_uid = validated_sec_uid(author.get("sec_uid"))
+    # 缺少明确入口配置时提前停止，不打开主页或猜测其他私信按钮。
+    if not isinstance(private_chat_xpath, str) or not private_chat_xpath.strip():
+        raise RuntimeError("请先在高级配置的 XPath配置中填写并保存私信按钮 XPath；未打开主页或发送消息")
     page = await context.new_page()
     page.set_default_timeout(10000)
     profile_url = f"https://www.douyin.com/user/{quote(sec_uid, safe='')}"
@@ -106,9 +110,8 @@ async def open_user_chat(context: Any, author: dict[str, Any],
         # 私密账号虽然展示私信按钮，但实测可能没有聊天界面，不能将点击视为成功。
         if await page.get_by_text("私密账号", exact=True).first.is_visible():
             raise RuntimeError("该账号为私密账号，请在抖音中确认是否可私信；未发送消息")
-        # 只匹配明确的私信入口；不点关注、发送、登录或任何模糊匹配按钮。
-        name = re.compile(r"^(私信|发私信|发送私信|私聊)$")
-        buttons = page.get_by_role("button", name=name).or_(page.get_by_role("link", name=name))
+        # 只使用管理员显式填写的 XPath，失效时不得自动退回其他入口。
+        buttons = page.locator(f"xpath={private_chat_xpath.strip()}")
         await buttons.first.wait_for(state="visible", timeout=10000)
         visible = [button for button in await buttons.all() if await button.is_visible()]
         if len(visible) != 1:

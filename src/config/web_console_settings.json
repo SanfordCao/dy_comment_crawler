@@ -3,5 +3,6 @@
   "detail_xpath": "//*[@role='tab' and @data-tabkey='semiTabdetail_tab']",
   "author_xpath": "//div[contains(@class,'wWJV9hON')]/span[1]",
   "title_xpath": "//div[contains(@class,'EVDAy35S')]//span[contains(@class,'WPbbXM3l')]",
-  "comment_xpath": "//*[@role='tab' and @data-tabkey='semiTabcomment']"
+  "comment_xpath": "//*[@role='tab' and @data-tabkey='semiTabcomment']",
+  "private_chat_xpath": "//button[normalize-space(.)='私信']"
 }

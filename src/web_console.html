@@ -1774,11 +1774,9 @@
             <h2>页面操作与视频信息 XPath</h2>
             <p style="margin:-8px 0 20px;color:var(--muted)">采集顺序：打开视频并暂停 → 点击评论图标 → 点击详情 XPath →
                 读取作者昵称和标题 → 点击评论 XPath → 开始采集。XPath 配置保存在本机项目目录中。</p>
-            <div class="field"><label for="pauseXpath">暂停按钮 XPath</label><textarea id="pauseXpath" rows="3"
-                                                                                       placeholder="/html/body/.../暂停按钮"></textarea><small>视频打开、登录或验证完成后，先点击此节点暂停视频。已暂停时不会重复点击；留空则跳过，点击失败会记录日志并继续采集。</small>
+            <div class="field"><label for="pauseXpath">暂停按钮 XPath</label><textarea id="pauseXpath" rows="3"></textarea><small>视频打开、登录或验证完成后，先点击此节点暂停视频。已暂停时不会重复点击；留空则跳过，点击失败会记录日志并继续采集。</small>
             </div>
-            <div class="field"><label for="detailXpath">详情按钮 XPath</label><textarea id="detailXpath" rows="3"
-                                                                                        placeholder="/html/body/.../详情入口"></textarea><small>评论图标打开后点击此节点，再读取昵称和视频标题。</small>
+            <div class="field"><label for="detailXpath">详情按钮 XPath</label><textarea id="detailXpath" rows="3"></textarea><small>评论图标打开后点击此节点，再读取昵称和视频标题。</small>
             </div>
             <div class="field"><label for="authorXpath">作者昵称 XPath</label><textarea id="authorXpath" rows="3"
                                                                                         placeholder="/html/body/.../span"></textarea><small>可定位到作者元素，也可定位到文本或属性节点。</small>
@@ -1786,9 +1784,9 @@
             <div class="field"><label for="titleXpath">视频标题 XPath</label><textarea id="titleXpath" rows="3"
                                                                                        placeholder="/html/body/.../h1"></textarea><small>元素节点会读取文本；meta
                 等元素会优先读取 content 属性。</small></div>
-            <div class="field"><label for="commentXpath">评论按钮 XPath</label><textarea id="commentXpath" rows="3"
-                                                                                         placeholder="/html/body/.../评论入口"></textarea><small>读取作者和标题后点击此节点，再开始抓取评论。</small>
+            <div class="field"><label for="commentXpath">评论按钮 XPath</label><textarea id="commentXpath" rows="3"></textarea><small>读取作者和标题后点击此节点，再开始抓取评论。</small>
             </div>
+            <div class="field"><label for="privateChatXpath">私信按钮 XPath</label><textarea id="privateChatXpath" rows="3"></textarea><small>用于用户主页的私信入口，单条和批量私信共用；必须填写并保存，不自动匹配。仍需先核对主页身份。</small></div>
             <div class="actions">
                 <button id="saveXpath" class="btn primary">保存配置</button>
                 <button id="clearXpath" class="btn">清空</button>
@@ -2225,7 +2223,8 @@
             $("detailXpath").value = settings.detail_xpath || "";
             $("authorXpath").value = settings.author_xpath || "";
             $("titleXpath").value = settings.title_xpath || "";
-            $("commentXpath").value = settings.comment_xpath || ""
+            $("commentXpath").value = settings.comment_xpath || "";
+            $("privateChatXpath").value = settings.private_chat_xpath || ""
         } catch (error) {
             showXpathNotice(error.message, true)
         }
@@ -2245,10 +2244,11 @@
                     detail_xpath: $("detailXpath").value,
                     author_xpath: $("authorXpath").value,
                     title_xpath: $("titleXpath").value,
-                    comment_xpath: $("commentXpath").value
+                    comment_xpath: $("commentXpath").value,
+                    private_chat_xpath: $("privateChatXpath").value
                 })
             });
-            showXpathNotice("XPath 配置已保存，新采集任务将使用此配置")
+            showXpathNotice("XPath 配置已保存，新采集任务和私信操作将使用此配置")
         } catch (error) {
             showXpathNotice(error.message, true)
         }
@@ -2258,7 +2258,8 @@
         $("detailXpath").value = "";
         $("authorXpath").value = "";
         $("titleXpath").value = "";
-        $("commentXpath").value = ""
+        $("commentXpath").value = "";
+        $("privateChatXpath").value = ""
     };
     $("advancedToggle").onclick = () => {
         const panel = $("advancedSettings"), expanded = panel.hidden;
