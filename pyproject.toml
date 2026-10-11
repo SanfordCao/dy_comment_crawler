@@ -14,12 +14,21 @@ dependencies = [
   "playwright>=1.50,<2",
 ]
 
+[project.optional-dependencies]
+licensing = ["customtkinter>=5.2,<6", "cryptography>=43,<52"]
+
 [project.scripts]
+douyin-activation = "activation_window:main"
 douyin-web = "web_console:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 py-modules = [
+  "activation_window",
+  "offline_license",
+  "browser_session",
+  "private_chat",
+  "private_chat_batch",
   "comments",
   "crawler",
   "export_comments_excel",
