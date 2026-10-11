@@ -6,6 +6,18 @@ import webbrowser
 import sys
 
 
+def show_license_dialog(title: str, text: str, error: bool = False) -> None:
+    """使用 Windows 原生窗口展示授权，不在托盘线程启动 Tk 事件循环。"""
+    import ctypes
+    from ctypes import wintypes
+
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
+    user.MessageBoxW.restype = ctypes.c_int
+    # MB_SETFOREGROUND 让用户主动打开的授权信息不会被浏览器遮住。
+    user.MessageBoxW(None, text, title, (0x10 if error else 0x40) | 0x10000)
+
+
 def set_windows_process_icons() -> list[int]:
     """从当前 EXE 提取图标并设置本进程窗口图标，返回需释放的句柄。"""
     if sys.platform != "win32" or not getattr(sys, "frozen", False):
@@ -62,13 +74,16 @@ def release_windows_icons(handles: list[int]) -> None:
 
 
 class WorkbenchTray:
-    def __init__(self, url: str, shutdown: Callable[[], None]) -> None:
+    def __init__(self, url: str, shutdown: Callable[[], None],
+                 license_info: Callable[[], dict] | None = None) -> None:
         """创建托盘菜单，延迟导入桌面依赖以保持源码跨平台启动。"""
         import pystray
         from app_icon import create_app_icon
 
         self.url = url
         self.shutdown = shutdown
+        self.license_info = license_info
+        self.authorization_viewing = Event()
         self.exiting = Event()
         self.process_icons: list[int] = []
         image = create_app_icon(64)
@@ -76,6 +91,7 @@ class WorkbenchTray:
             "douyin-workbench", image, "抖音评论工作台",
             menu=pystray.Menu(
                 pystray.MenuItem("打开工作台", self.open_workbench, default=True),
+                pystray.MenuItem("查看授权信息", self.view_authorization),
                 pystray.MenuItem("退出", self.request_exit),
             ),
         )
@@ -84,6 +100,33 @@ class WorkbenchTray:
         """重新打开本机工作台，不重复启动服务或采集任务。"""
         if not self.exiting.is_set():
             webbrowser.open(self.url)
+
+    def view_authorization(self, icon=None, item=None) -> None:
+        """异步核对授权并展示信息，避免网络取时阻塞托盘及退出菜单。"""
+        if self.exiting.is_set() or self.authorization_viewing.is_set():
+            return
+        self.authorization_viewing.set()
+        Thread(target=self._display_authorization, name="authorization-info", daemon=True).start()
+
+    def _display_authorization(self) -> None:
+        """显示最新验签结果，失败不把旧缓存授权显示为有效。"""
+        try:
+            if self.license_info is None:
+                raise ValueError("授权信息不可用，请重新启动程序")
+            payload = self.license_info()
+            from activation_window import authorization_expiry_text
+
+            expires = authorization_expiry_text(payload)
+            customer = str(payload.get("customer") or "未填写")[:80]
+            license_id = str(payload.get("license_id") or "未填写")[:80]
+            if not self.exiting.is_set():
+                show_license_dialog("授权信息", f"授权状态：有效\n授权用户：{customer}\n授权编号：{license_id}\n\n有效期截止（北京时间）：{expires}\n该时刻起授权失效。")
+        except (ValueError, OSError) as error:
+            if not self.exiting.is_set():
+                show_license_dialog("授权验证失败", f"{error}\n\n请重新启动程序并输入有效授权码。", error=True)
+        finally:
+            # 对话框关闭或查询失败都恢复入口，重复点击不会打开多个窗口。
+            self.authorization_viewing.clear()
 
     def request_exit(self, icon=None, item=None) -> None:
         """只请求一次退出，在独立线程停服务，避免阻塞托盘消息循环。"""

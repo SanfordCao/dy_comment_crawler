@@ -4,7 +4,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import platform
 import re
 import sys
 from datetime import datetime, timezone
@@ -20,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 PRODUCT = "douyin-comment-crawler"
 DEVICE_PATTERN = r"DY1-(?:[A-F0-9]{8}-){7}[A-F0-9]{8}"
+LICENSE_CODE_PREFIX = "DYLIC1-"
 
 
 class LicenseError(ValueError):
@@ -39,6 +39,36 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise LicenseError("文件包含重复字段")
         result[key] = value
     return result
+
+
+def encode_license_code(data: dict[str, Any]) -> str:
+    """将完整已签名授权编码为可复制文本，不改变签名或隐藏载荷。"""
+    raw = canonical_json(data)
+    if len(raw) > 65536:
+        raise LicenseError("授权内容超过 64 KB")
+    return LICENSE_CODE_PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_license_code(code: str) -> dict[str, Any]:
+    """有界解析授权码，允许粘贴换行，拒绝重复字段及无效编码。"""
+    if not isinstance(code, str) or len(code) > 100000:
+        raise LicenseError("授权码为空或过长，请复制完整授权码")
+    compact = "".join(code.split())
+    if not compact.startswith(LICENSE_CODE_PREFIX):
+        raise LicenseError("授权码格式无效，请粘贴 DYLIC1- 开头的完整授权码")
+    encoded = compact[len(LICENSE_CODE_PREFIX):]
+    if not encoded or not re.fullmatch(r"[A-Za-z0-9_-]+", encoded):
+        raise LicenseError("授权码编码无效，请重新复制")
+    try:
+        raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+        if len(raw) > 65536:
+            raise LicenseError("授权内容超过 64 KB")
+        data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+        if not isinstance(data, dict) or not isinstance(data.get("payload"), dict) or not isinstance(data.get("signature"), str):
+            raise LicenseError("授权码缺少完整签名信息")
+        return data
+    except (ValueError, UnicodeError, RecursionError) as error:
+        raise LicenseError("授权码无效或被修改，请重新复制完整授权码") from error
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -92,17 +122,16 @@ def verify_license(data: dict[str, Any], public_pem: bytes, code: str, now: date
     if now < start:
         raise LicenseError("授权尚未生效或网络时间异常")
     if now >= end:
-        raise LicenseError("授权已过期，请导入新的授权文件")
+        raise LicenseError("授权已过期，请输入新的授权码")
     return dict(payload)
 
 
 def user_data_dir() -> Path:
-    """数据写入用户可写目录，不写入 EXE 解压目录或 Program Files。"""
-    if platform.system() == "Windows":
-        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    else:
-        base = Path.home() / "Library" / "Application Support"
-    return base / "DouyinCommentWorkbench" / "licensing"
+    """授权保存在 EXE 同级目录；源码运行时保存在项目根目录。"""
+    if getattr(sys, "frozen", False):
+        # 单文件 EXE 的 __file__ 指向临时解压目录，必须使用实际启动文件位置。
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[1]
 
 
 def public_key_path() -> Path:
@@ -167,13 +196,24 @@ class LicenseManager:
         with self.lock:
             path = self.data_dir / "license.lic"
             if not path.exists():
-                raise LicenseError("尚未激活，请导入管理员签发的授权文件")
+                raise LicenseError("尚未激活，请输入管理员签发的授权码")
             return self._verify(read_json(path))
 
     def import_license(self, path: Path) -> dict[str, Any]:
         """完整验证成功后才替换本机授权，导入失败不覆盖已有有效文件。"""
+        return self._save_verified(read_json(path))
+
+    def import_code(self, code: str) -> dict[str, Any]:
+        """从输入授权码激活，保持与文件导入相同的签名与设备校验。"""
+        return self._save_verified(decode_license_code(code))
+
+    def _save_verified(self, data: dict[str, Any]) -> dict[str, Any]:
+        """完整验证后原子保存，无效授权码绝不覆盖现有授权。"""
         with self.lock:
-            data = read_json(path)
             payload = self._verify(data)
-            atomic_json(self.data_dir / "license.lic", data)
+            try:
+                # 完整验签后才落盘，不把无效授权替换到运行目录中。
+                atomic_json(self.data_dir / "license.lic", data)
+            except OSError as error:
+                raise LicenseError("无法保存 license.lic：请将程序放到有写入权限的目录后重新导入授权") from error
             return payload

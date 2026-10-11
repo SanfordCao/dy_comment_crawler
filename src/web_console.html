@@ -1882,6 +1882,19 @@
 <script>
     const $ = id => document.getElementById(id);
     let selectedRun = "", selectedRunInfo = null, allComments = [], lastStatus = "";
+    let licenseFailure = "";
+    /** 授权失效同时显示常驻状态及一次滑出提示，不允许页面再启动采集。 */
+    function showLicenseFailure(message) {
+        const changed = licenseFailure !== message;
+        licenseFailure = message;
+        $("statusText").textContent = message;
+        $("dot").className = "dot failed";
+        $("start").disabled = true;
+        $("stop").disabled = true;
+        $("waiting").classList.remove("show");
+        setStoppingDialog(false);
+        if (changed) showNotice(message, true);
+    }
     const api = async (url, options = {}) => {
         const response = await fetch(url, options);
         let data;
@@ -1890,7 +1903,12 @@
         } catch {
             data = null
         }
-        if (!response.ok) throw new Error(data?.error || `请求失败 (${response.status})`);
+        if (!response.ok) {
+            const error = new Error(data?.error || `请求失败 (${response.status})`);
+            error.licenseFailure = response.status === 403 && ["license_expired", "license_invalid"].includes(data?.code);
+            if (error.licenseFailure) showLicenseFailure(error.message);
+            throw error;
+        }
         return data
     };
     document.querySelectorAll(".tab").forEach(button => button.onclick = () => {
@@ -2332,6 +2350,7 @@
     }
 
     $("start").onclick = async () => {
+        if (licenseFailure) {showLicenseFailure(licenseFailure);return;}
         const button = $("start");
         button.disabled = true;
         try {
@@ -2350,8 +2369,8 @@
             });
             showNotice(options.concurrent ? `任务已启动，最多同时采集 ${options.concurrency_limit} 个视频` : "任务已启动，视频将按顺序采集")
         } catch (error) {
-            showNotice(error.message, true);
-            button.disabled = false
+            if (!error.licenseFailure) showNotice(error.message, true);
+            button.disabled = Boolean(licenseFailure)
         }
     };
 
@@ -2561,6 +2580,8 @@
     async function poll() {
         try {
             const state = await api("/api/status");
+            // 其他并行接口已经发现过期时，较早返回的状态不能重新启用启动按钮。
+            if (licenseFailure) return;
             renderBatch(state.batch);
             syncRunActions(state.batch);
             const finished = ["succeeded", "stopped", "failed"].includes(state.status);

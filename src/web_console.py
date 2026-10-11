@@ -21,7 +21,7 @@ import shutil
 import sys
 import traceback
 import webbrowser
-from offline_license import LicenseManager
+from offline_license import LicenseError, LicenseManager
 
 try:
     from .crawler import CrawlerConfig, crawl_douyin_comments
@@ -125,6 +125,7 @@ class ConsoleState:
     def __init__(self, project_root: Path) -> None:
         """初始化工作台状态，先补齐发行配置再读取用户设置。"""
         self.project_root = project_root.resolve()
+        self.capture_authorization: Callable[[], dict] | None = None
         initialize_packaged_config(self.project_root)
         self.output_root = self.project_root / "output"
         self.profile_dir = self.project_root / ".douyin-browser-profile"
@@ -540,6 +541,7 @@ class ConsoleState:
             }
 
     def start(self, options: dict[str, Any]) -> None:
+        """创建采集队列前重新验证授权，失败不保存配置或启动线程。"""
         options = {**self.get_capture_settings(), **options}
         urls = self.video_urls(options)
         capture_settings = self._validated_capture_settings(options)
@@ -548,6 +550,10 @@ class ConsoleState:
         if options.get("fetch_mode", "network_first") not in {"network_first", "scroll_only"}:
             raise ValueError("一级评论加载方式无效")
         with self.lock:
+            # HTTP 入口校验后可能仍在读取参数，写队列前必须再按当前网络时间核验。
+            if self.capture_authorization is None:
+                raise LicenseError("无法验证授权，不允许启动采集")
+            self.capture_authorization()
             if self.worker is not None and self.worker.is_alive():
                 raise RuntimeError("已有抓取任务正在运行")
             self._save_capture_settings_locked(capture_settings)
@@ -980,6 +986,8 @@ class ConsoleServer(ThreadingHTTPServer):
         self.state = state
         self.license_manager = manager
         self.license_failure = ""
+        self.license_failure_lock = Lock()
+        self.state.capture_authorization = self.check_capture_authorization
         self.license_stop = Event()
         self.license_thread = Thread(target=self._watch_license, name="license-watch", daemon=True)
 
@@ -989,15 +997,43 @@ class ConsoleServer(ThreadingHTTPServer):
         super().serve_forever(poll_interval)
 
     def _watch_license(self) -> None:
-        """每两秒校验期限，网络时钟内部每五分钟刷新；失败走正常退出清理。"""
+        """每两秒校验期限，失效后停止活动任务但保留页面错误提示服务。"""
         while not self.license_stop.wait(2):
             try:
-                self.license_manager.require()
+                self.require_authorization()
             except (ValueError, OSError) as error:
-                self.license_failure = str(error)
-                # shutdown 在独立监测线程调用，主线程执行完整停止与资源清理。
-                self.shutdown()
+                self.invalidate_authorization(str(error))
                 return
+
+    def check_capture_authorization(self) -> dict:
+        """队列锁内只做验证，交给 HTTP 错误分支停止任务，避免重入任务锁。"""
+        return self.require_authorization(stop_on_failure=False)
+
+    def require_authorization(self, *, stop_on_failure: bool = True) -> dict:
+        """按当前时间检查授权；已失效服务必须重启激活，不继续业务操作。"""
+        if self.license_failure:
+            raise LicenseError(self.license_failure)
+        try:
+            return self.license_manager.require()
+        except (ValueError, OSError) as error:
+            if stop_on_failure:
+                self.invalidate_authorization(str(error))
+            raise LicenseError(str(error)) from error
+
+    def invalidate_authorization(self, reason: str) -> None:
+        """锁存失效原因并仅停止一次任务，保留服务以返回明确的授权提示。"""
+        with self.license_failure_lock:
+            if self.license_failure:
+                return
+            self.license_failure = reason
+        # 先设置失效状态再停止，后续请求无法在停止窗口内启动新的任务。
+        try:
+            self.state.stop(require_running=False)
+        except (OSError, RuntimeError):
+            # 停止事件已先设置；保存队列失败不能把明确的授权错误替换成其他错误。
+            pass
+        finally:
+            self.state.private_chat_batch.stop()
 
     def server_close(self) -> None:
         """停止监测后释放服务端口，重复关闭不保留后台线程。"""
@@ -1048,7 +1084,8 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         """读取工作台页面、任务状态及采集结果。"""
-        if not self._check_license():
+        # 失效后仍允许刷新页面外壳；所有数据及操作接口保持授权拦截。
+        if urlparse(self.path).path not in {"/", "/index.html"} and not self._check_license():
             return
         parsed = urlparse(self.path)
         path = parsed.path
@@ -1222,6 +1259,8 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True})
                 return
             self.send_error(404)
+        except LicenseError as error:
+            self._license_denied(str(error))
         except (ValueError, FileNotFoundError, OSError, RuntimeError, json.JSONDecodeError) as error:
             self._json(400, {"error": str(error)})
 
@@ -1229,13 +1268,18 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
     def _check_license(self) -> bool:
         """所有页面/API 都校验授权，失效时返回明确错误而不是继续操作。"""
         try:
-            if self.server.license_failure:
-                raise ValueError(self.server.license_failure)
-            self.server.license_manager.require()
+            self.server.require_authorization()
             return True
         except (ValueError, OSError) as error:
-            self._json(403, {"error": f"{error}；请重新启动并验证授权。"})
+            self._license_denied(str(error))
             return False
+
+    def _license_denied(self, reason: str) -> None:
+        """返回结构化授权错误，让页面明确区分过期与其他校验失败。"""
+        self.server.invalidate_authorization(reason)
+        expired = "过期" in reason
+        message = "授权已过期，未启动采集任务；请续期后重新启动程序。" if expired else f"授权验证失败：{reason}；请重新启动并验证授权。"
+        self._json(403, {"error": message, "code": "license_expired" if expired else "license_invalid"})
 
 
 def workbench_data_dir() -> Path:
@@ -1298,7 +1342,7 @@ def _run_workbench(args: Any, instance: Any = None, manager: LicenseManager | No
     try:
         if sys.platform == "win32" and getattr(sys, "frozen", False):
             from desktop_tray import WorkbenchTray
-            tray = WorkbenchTray(url, server.shutdown)
+            tray = WorkbenchTray(url, server.shutdown, server.license_manager.require)
             tray.start()
         if instance is not None:
             # 回调持有首个进程的真实 URL，即使使用自定义端口也不会打开错误地址。
