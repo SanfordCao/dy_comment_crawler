@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>授权管理 · 管理员工具</title>
+<style nonce="__ISSUER_TOKEN__">
+:root{color-scheme:light;font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;color:#182923;background:#f4f5ee;font-size:16px}
+*{box-sizing:border-box}body{margin:0}main{max-width:1180px;margin:auto;padding:44px 24px 70px}header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:26px}h1{font-size:32px;margin:0 0 8px}h2{font-size:22px;margin:0 0 10px}p{line-height:1.65;color:#62746b;margin:8px 0}.badge{background:#e4f1eb;color:#12796c;padding:10px 16px;border-radius:24px;white-space:nowrap}.warning{background:#fff3df;border:1px solid #eedbb4;border-radius:15px;padding:17px 20px;line-height:1.7;margin-bottom:24px;color:#805719}.columns{display:grid;grid-template-columns:1fr 1.15fr;gap:24px;align-items:start}.card{background:#fffefa;border:1px solid #e0e5dd;border-radius:22px;padding:28px;box-shadow:0 12px 35px #192e2210}.step{font-size:12px;letter-spacing:2px;color:#12796c;font-weight:700;margin-bottom:12px}label{display:block;font-weight:600;margin:20px 0 8px}input,select{font:inherit;width:100%;padding:13px 14px;border:1px solid #cfd9d1;border-radius:10px;background:#fff;color:inherit;min-width:0}input:focus,select:focus{outline:2px solid #12796c40;border-color:#12796c}input[type=file]{font-size:14px}button{font:inherit;cursor:pointer;padding:12px 16px;border:0;border-radius:11px;background:#e7ede7;color:#253e31;font-weight:600}button.primary{background:#12796c;color:#fff}button.danger{background:#fff0eb;color:#9c4930}button:disabled{opacity:.45;cursor:not-allowed}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}.actions>button{flex:1}.hint{font-size:13px;line-height:1.7;color:#78867d;margin-top:10px}.result{background:#edf6f0;border-radius:12px;padding:15px;margin-top:20px;overflow-wrap:anywhere}.code{font-family:ui-monospace,monospace;font-size:13px;line-height:1.7;white-space:pre-wrap}footer{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-top:24px}.toast{position:fixed;right:24px;bottom:24px;max-width:min(460px,calc(100vw - 48px));background:#183e31;color:white;padding:16px 22px;border-radius:13px;box-shadow:0 8px 28px #0003;transform:translateY(140%);transition:transform .2s;z-index:100}.toast.show{transform:translateY(0)}.toast.error{background:#913f36}[hidden]{display:none!important}dialog{border:0;border-radius:20px;padding:28px;max-width:470px;box-shadow:0 20px 60px #0003}dialog::backdrop{background:#132a2366}@media(max-width:800px){main{padding:24px 16px}.columns{grid-template-columns:1fr}.card{padding:22px}header,footer{align-items:start;flex-direction:column}h1{font-size:27px}}
+/* 默认完全隐藏提示，避免空提示在长页面截图或滚动时露出。 */
+.toast{visibility:hidden;opacity:0}.toast.show{visibility:visible;opacity:1}
+textarea{font:inherit;width:100%;padding:12px;border:1px solid #cfd9d1;border-radius:10px;resize:vertical;overflow-wrap:anywhere}textarea[readonly]{background:#f6f9f5;font-family:ui-monospace,monospace;font-size:13px}
+</style>
+</head>
+<body><main>
+<header><div><h1>授权管理</h1><p>生成密钥、签发授权，所有操作都在管理员电脑完成。</p></div><span class="badge">仅本机 · 不对外上传</span></header>
+<div class="warning">私钥与密码只由你保管，不能发给用户。公钥复制到 <strong>src/licensing/license_public_key.pem</strong> 后打包。已有密钥请继续使用，不要重新生成，否则旧授权无法通过验证。</div>
+<div class="columns">
+<section class="card"><div class="step">01 · 首次准备</div><h2>生成密钥对</h2><p>使用 Ed25519 签名；下载的私钥已加密。</p>
+<form id="keyForm">
+<label for="newPassword">私钥密码</label><input id="newPassword" type="password" minlength="12" maxlength="1024" autocomplete="new-password" placeholder="至少 12 个字符" required>
+<label for="confirmPassword">再次输入密码</label><input id="confirmPassword" type="password" maxlength="1024" autocomplete="new-password" required>
+<div class="actions"><button id="generate" class="primary" type="submit">生成密钥对</button></div>
+</form>
+<div id="keyResult" class="result" hidden><strong>密钥已生成，请分别下载并备份</strong><p class="hint">私钥保存在项目之外的安全目录；公钥放入 licensing。刷新页面会清除尚未下载的临时密钥。</p>
+<div class="actions"><button id="downloadPublic" type="button">下载公钥</button><button id="downloadPrivate" class="primary" type="button">下载加密私钥</button></div>
+<div class="actions"><button id="clearKeys" type="button">清除临时密钥</button></div></div>
+<p class="hint">密码不会自动保存。遗失私钥或密码后无法恢复，请妥善备份。浏览器按下载设置保存文件；不会自动覆盖指定目录的文件。</p>
+</section>
+<section class="card"><div class="step">02 · 每位用户</div><h2>签发授权文件</h2><p>粘贴用户复制的设备码，为指定设备设置有效期。</p>
+<form id="issueForm">
+<label for="privateFile">上传加密私钥文件（.pem）</label><input id="privateFile" type="file" accept=".pem">
+<div class="actions"><button id="uploadKey" type="button">上传并保存文件</button></div>
+<p class="hint">支持保存多份加密私钥，文件保存在 tools/admin_keys 目录，不进入客户端 EXE。上传不需要密码；签发时才验证密码及密钥类型。新生成的私钥请先下载备份，再上传。</p>
+<label for="keySource">选择签发私钥文件</label><select id="keySource" required><option value="">请选择已上传的私钥文件</option></select>
+<div class="actions"><button id="forgetKey" type="button" disabled>删除所选私钥副本</button></div>
+<p class="hint">请确认所选私钥对应客户端内置公钥；密码每次输入，不保存。删除仅影响所选副本，不删除原文件或其他私钥。</p>
+<label for="deviceCode">用户设备码</label><input id="deviceCode" type="text" maxlength="80" pattern="DY1-([A-F0-9]{8}-){7}[A-F0-9]{8}" autocomplete="off" spellcheck="false" placeholder="粘贴 DY1- 开头的完整设备码" required>
+<p class="hint">请复制粘贴，不要手输。签发前核对设备码及到期时间；格式正确不代表属于目标用户。</p>
+<label for="expires">到期时间（北京时间）</label><input id="expires" type="datetime-local" step="1" required><p class="hint">精确到秒；到达所选时刻即失效。不按电脑本地时区换算，不再自动延长到次日零点。</p>
+<label for="signPassword">私钥密码</label><input id="signPassword" type="password" maxlength="1024" autocomplete="off" required>
+<div class="actions"><button id="issue" class="primary" type="submit">生成并复制签名</button></div>
+</form><div id="issueResult" class="result" hidden><p id="issueSummary"></p><label for="authorizationCode">完整签名授权码</label><textarea id="authorizationCode" rows="5" readonly spellcheck="false"></textarea><div class="actions"><button id="copyAuthorization" class="primary" type="button">复制签名</button></div><p class="hint">将完整授权码发给用户，包含签名、设备绑定及有效期信息。复制失败时可在上方手动全选复制，无需重新签发。</p></div>
+</section>
+</div>
+<footer><p class="hint">只将完整签名授权码发给用户，不能发送私钥或管理员工具。关闭页面不会关闭本机服务。</p></footer>
+</main>
+<dialog id="clearDialog"><h2>清除临时密钥？</h2><p>请确认公钥和加密私钥都已下载并妥善保存。清除后本页无法恢复这些密钥。</p><div class="actions"><button id="cancelClear" type="button">取消</button><button id="confirmClear" class="danger" type="button">确认清除</button></div></dialog>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<dialog id="forgetKeyDialog"><h2>删除所选私钥副本？</h2><p id="forgetKeyName"></p><p>只删除管理员工具保存的这一份副本，不删除原始私钥文件或其他密钥，也不影响已签发的授权。</p><div class="actions"><button id="cancelForget" type="button">取消</button><button id="confirmForget" class="danger" type="button">确认删除</button></div></dialog>
+<script nonce="__ISSUER_TOKEN__">
+"use strict";
+const token = "__ISSUER_TOKEN__";
+let generatedKeys = null, toastTimer = null, deletingKey = '';
+/** 获取已存在控件，避免通过隐式窗口全局变量访问 DOM。 */
+function el(id){return document.getElementById(id);}
+/** 非确认反馈用滑出提示，文本不作为 HTML 解析。 */
+function notice(text,error=false){clearTimeout(toastTimer);el('toast').textContent=text;el('toast').className='toast show'+(error?' error':'');toastTimer=setTimeout(hideToast,6500);}
+/** 自动收起提示，不打断管理员当前操作。 */
+function hideToast(){el('toast').classList.remove('show');}
+/** 仅请求本机接口，页面令牌和服务端来源校验阻止外站签发。 */
+async function api(path,data){const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Issuer-Token':token},body:JSON.stringify(data),cache:'no-store'});const result=await response.json();if(!response.ok)throw new Error(result.error||'操作失败');return result;}
+/** 显式下载内容，不写浏览器持久化存储，及时回收对象 URL。 */
+function download(text,name){const url=URL.createObjectURL(new Blob([text],{type:'application/octet-stream'}));const link=document.createElement('a');link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();setTimeout(URL.revokeObjectURL,1000,url);}
+/** 在用户主动选择后有界读取文件，文件不上传到外部服务。 */
+async function readFile(input){const file=input.files[0];if(!file)throw new Error('请先选择所需文件');if(file.size>65536)throw new Error('文件不能超过 64 KB');return (await file.text()).replace(/^\uFEFF/,'');}
+/** 密钥每次只生成一次，避免重复点击丢失刚生成且未备份的私钥。 */
+async function generateKeys(event){event.preventDefault();if(generatedKeys)return;if(el('newPassword').value!==el('confirmPassword').value){notice('两次密码不一致',true);return;}el('generate').disabled=true;try{generatedKeys=await api('/api/keys',{password:el('newPassword').value});el('keyResult').hidden=false;notice('密钥已生成，请下载备份，再上传加密私钥文件。');}catch(error){notice(error.message,true);el('generate').disabled=false;}finally{el('newPassword').value='';el('confirmPassword').value='';}}
+/** 公钥只需复制到发行资源目录，不是用于签发的私钥。 */
+function downloadPublic(){if(generatedKeys)download(generatedKeys.public_pem,'license_public_key.pem');}
+/** 下载的私钥为加密 PEM，不在页面上展示私钥内容。 */
+function downloadPrivate(){if(generatedKeys)download(generatedKeys.private_pem,'license_private_key.pem');}
+/** 切换私钥后清空密码，避免用上一个文件的密码误签发。 */
+function updateKeySource(){el('forgetKey').disabled=!el('keySource').value;el('signPassword').value='';}
+/** 安全展示文件名及短标识，同名文件可区分，不将密钥内容返回浏览器。 */
+function applySavedKey(status,selected=''){const select=el('keySource'),previous=selected||select.value;select.replaceChildren(new Option('请选择已上传的私钥文件',''));for(const key of status.keys||[]){select.add(new Option(key.name+'（'+(key.id==='legacy'?'旧缓存':key.id.slice(0,8))+'）',key.id));}select.value=Array.from(select.options).some(option=>option.value===previous)?previous:'';updateKeySource();}
+/** 重新打开页面只恢复文件列表，需主动选择签发文件。 */
+async function loadSavedKey(){try{applySavedKey(await api('/api/key/status',{}));}catch(error){notice('读取私钥文件列表失败，请检查管理员保存目录。',true);}}
+/** 上传加密文件并选择新条目，不读取或保存签发密码。 */
+async function uploadKey(){if(el('issue').disabled)return;el('uploadKey').disabled=true;el('issue').disabled=true;try{const input=el('privateFile'),privatePem=await readFile(input);const result=await api('/api/key/upload',{name:input.files[0].name,private_pem:privatePem});applySavedKey(result,result.key_id);input.value='';notice('加密私钥已保存并选中，请输入密码签发。');}catch(error){notice(error.message,true);}finally{el('uploadKey').disabled=false;el('issue').disabled=false;}}
+/** 删除缓存前弹出确认，避免丢失管理员尚未备份的唯一副本。 */
+function askForgetKey(){if(el('issue').disabled||!el('keySource').value)return;deletingKey=el('keySource').value;el('forgetKeyName').textContent=el('keySource').selectedOptions[0].textContent;el('forgetKeyDialog').showModal();}
+/** 取消删除不改变签发密钥选择。 */
+function cancelForgetKey(){deletingKey='';el('forgetKeyDialog').close();}
+/** 显式清除服务端加密副本，清空输入密码而不影响原文件。 */
+async function forgetKey(){if(!deletingKey)return;el('confirmForget').disabled=true;try{applySavedKey(await api('/api/key/clear',{key_id:deletingKey}));deletingKey='';el('forgetKeyDialog').close();notice('已删除所选私钥副本，原文件和其他密钥不受影响。');}catch(error){notice(error.message,true);}finally{el('confirmForget').disabled=false;}}
+/** 只清理粘贴产生的首尾空白，不擅自修正设备码内容。 */
+function trimDeviceCode(){el('deviceCode').value=el('deviceCode').value.trim();}
+/** 显式提交一次签发，失败不自动重试；发送后立即清空密码。 */
+async function issueLicense(event){event.preventDefault();if(el('issue').disabled)return;el('issue').disabled=true;el('issueResult').hidden=true;el('authorizationCode').value='';try{trimDeviceCode();const deviceCode=el('deviceCode').value;if(!/^DY1-(?:[A-F0-9]{8}-){7}[A-F0-9]{8}$/.test(deviceCode))throw new Error('设备码格式无效，请粘贴完整设备码');const keyId=el('keySource').value;if(!keyId)throw new Error('请先上传并选择私钥文件');const result=await api('/api/issue',{key_id:keyId,device_code:deviceCode,password:el('signPassword').value,expires:el('expires').value});const payload=result.license.payload;el('authorizationCode').value=result.authorization_code;el('issueSummary').textContent='授权已签发；编号：'+payload.license_id+'；到期：'+payload.expires_at;el('issueResult').hidden=false;await copyAuthorization();}catch(error){notice(error.message,true);}finally{el('signPassword').value='';el('issue').disabled=false;}}
+/** 复制完整签名载荷，失败保留结果供手工复制，不重新签发授权。 */
+async function copyAuthorization(){const code=el('authorizationCode').value;if(!code)return;try{await navigator.clipboard.writeText(code);notice('签名授权码已复制，请发送给用户。');}catch(error){el('authorizationCode').focus();el('authorizationCode').select();notice('授权已生成，浏览器未允许复制；请手动复制上方完整授权码。',true);}}
+/** 清除内存密钥需要确认，避免管理员误操作丢失未下载内容。 */
+function askClear(){el('clearDialog').showModal();}
+/** 取消清除时保持尚未下载的密钥不变。 */
+function cancelClear(){el('clearDialog').close();}
+/** 解除临时密钥引用，不删除已下载的任何文件。 */
+function clearKeys(){generatedKeys=null;el('keyResult').hidden=true;el('generate').disabled=false;el('signPassword').value='';el('clearDialog').close();notice('临时密钥已清除，已下载及上传文件不受影响。');}
+el('keyForm').addEventListener('submit',generateKeys);el('downloadPublic').addEventListener('click',downloadPublic);el('downloadPrivate').addEventListener('click',downloadPrivate);el('clearKeys').addEventListener('click',askClear);el('cancelClear').addEventListener('click',cancelClear);el('confirmClear').addEventListener('click',clearKeys);el('keySource').addEventListener('change',updateKeySource);el('uploadKey').addEventListener('click',uploadKey);el('deviceCode').addEventListener('input',trimDeviceCode);el('issueForm').addEventListener('submit',issueLicense);el('copyAuthorization').addEventListener('click',copyAuthorization);el('forgetKey').addEventListener('click',askForgetKey);el('cancelForget').addEventListener('click',cancelForgetKey);el('confirmForget').addEventListener('click',forgetKey);loadSavedKey();
+</script>
+</body></html>
