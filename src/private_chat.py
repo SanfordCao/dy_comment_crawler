@@ -6,6 +6,7 @@ import asyncio
 import re
 from datetime import datetime
 from time import monotonic
+from uuid import uuid4
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -109,11 +110,12 @@ async def open_user_chat(context: Any, author: dict[str, Any],
     """以 sec_uid 核对主页身份并确认私信界面出现，不以昵称作为身份依据。"""
     sec_uid = validated_sec_uid(author.get("sec_uid"))
     started = monotonic()
+    operation_id = uuid4().hex[:8]
     stage = "检查配置"
 
     def log_step(message: str) -> None:
         """打印目标及阶段耗时，不记录消息正文、Cookie 或带签名的接口地址。"""
-        print(f"[{datetime.now():%H:%M:%S}] [私信打开] [目标 {sec_uid}] "
+        print(f"[{datetime.now():%H:%M:%S}] [私信打开] [操作 {operation_id}] [目标 {sec_uid}] "
               f"[{stage}] [{monotonic() - started:.1f}s] {message}", flush=True)
 
     def enter_stage(name: str, message: str) -> None:
@@ -135,14 +137,124 @@ async def open_user_chat(context: Any, author: dict[str, Any],
     page.set_default_timeout(10000)
     profile_url = f"https://www.douyin.com/user/{quote(sec_uid, safe='')}"
     popups = []
+    listeners = []
+    resource_started = {}
+    resource_counts = {"开始": 0, "完成": 0, "失败": 0, "HTTP错误": 0}
+    target = page
+
+    def resource_path(request: Any) -> str | None:
+        """只筛选私信模块资源及 IM 接口，输出路径而不读取查询参数、正文或凭据。"""
+        parsed_url = urlparse(request.url)
+        path = parsed_url.path
+        host = parsed_url.hostname or ""
+        if ("/pcim/" in path or "pcim_saas_vmok_entry" in path
+                or "/im/" in path or "/imapi/" in path or host.startswith("im-api")):
+            return f"{host}{path}"
+        return None
+
+    def on_request(request: Any) -> None:
+        """记录目标页面私信资源开始时刻，用于区分首次初始化与后续缓存加载。"""
+        path = resource_path(request)
+        if path:
+            resource_counts["开始"] += 1
+            resource_started[request] = monotonic()
+            log_step(f"私信资源开始：{request.resource_type} {path}")
+
+    def on_request_finished(request: Any) -> None:
+        """记录私信资源传输完成；完成不代表组件已成功初始化。"""
+        path = resource_path(request)
+        if path:
+            resource_counts["完成"] += 1
+            since = resource_started.pop(request, None)
+            duration = f"{monotonic() - since:.2f}s" if since is not None else "未知"
+            log_step(f"私信资源完成：耗时 {duration} {path}")
+
+    def on_request_failed(request: Any) -> None:
+        """记录网络失败代码；不打印可能带敏感数据的完整请求或任意错误文本。"""
+        path = resource_path(request)
+        if path:
+            resource_counts["失败"] += 1
+            resource_started.pop(request, None)
+            code = re.search(r"(?:net::)?ERR_[A-Z0-9_]+", str(request.failure or ""))
+            log_step(f"私信资源失败：{code.group(0) if code else '网络加载失败'} {path}")
+
+    def on_response(response: Any) -> None:
+        """记录私信资源 HTTP 错误，避免把传输完成误判为加载成功。"""
+        path = resource_path(response.request)
+        if path and response.status >= 400:
+            resource_counts["HTTP错误"] += 1
+            log_step(f"私信资源 HTTP 错误：{response.status} {path}")
+
+    def on_page_error(error: Any) -> None:
+        """仅记录组件异常分类，不输出可能包含消息或账号资料的异常全文。"""
+        text = str(error)
+        categories = [name for name in ("ChunkLoadError", "Loading chunk", "Failed to fetch",
+                                        "TypeError", "ReferenceError", "SyntaxError") if name in text]
+        log_step(f"页面 JavaScript 异常：{', '.join(categories) or '未分类异常'}（未记录异常正文）")
+
+    def add_listener(emitter: Any, event: str, handler: Callable) -> None:
+        """保存监听器以便结束时全部移除，不跨操作累积或监听其他采集页面。"""
+        emitter.on(event, handler)
+        listeners.append((emitter, event, handler))
+
+    def observe_page(observed: Any, label: str) -> None:
+        """仅监听本操作主页及其弹窗的关闭、崩溃和资源加载事件。"""
+        def on_close(_: Any) -> None:
+            """区分页面关闭和组件等待超时；关闭原因仍须结合用户操作判断。"""
+            log_step(f"页面关闭事件：{label}；事件本身不能判断是人工关闭还是程序关闭")
+
+        def on_crash(_: Any) -> None:
+            """记录渲染进程崩溃，不主动重载页面。"""
+            log_step(f"页面崩溃事件：{label}")
+
+        for event, handler in (("close", on_close), ("crash", on_crash),
+                               ("request", on_request), ("requestfinished", on_request_finished),
+                               ("requestfailed", on_request_failed), ("response", on_response),
+                               ("pageerror", on_page_error)):
+            add_listener(observed, event, handler)
+
+    def on_context_close(_: Any) -> None:
+        """记录共享浏览器上下文关闭，帮助识别 TargetClosedError 的范围。"""
+        log_step("浏览器上下文关闭事件：本次操作所用会话已关闭")
+
+    async def log_component_state(observed: Any, label: str) -> None:
+        """读取组件数量及可见性，不读取聊天正文；诊断失败不能覆盖原始操作错误。"""
+        log_step(f"组件检查 {label}：页面已关闭={observed.is_closed()}；"
+                 f"资源统计={resource_counts}；尚未完成={len(resource_started)}")
+        if observed.is_closed():
+            return
+        try:
+            # 有界诊断避免页面崩溃时额外卡住；只检查 DOM 状态，不等待组件就绪。
+            state = await asyncio.wait_for(observed.evaluate("""() => {
+                const count = selector => {
+                    const nodes = [...document.querySelectorAll(selector)];
+                    return {total: nodes.length, visible: nodes.filter(node => {
+                        const rect = node.getBoundingClientRect();
+                        const style = getComputedStyle(node);
+                        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden';
+                    }).length};
+                };
+                return {dom: document.readyState,
+                    container: count('.imContainer'),
+                    popup: count('#pc-im-popup-container'),
+                    editor: count('.messageEditorinputArea[contenteditable="true"]'),
+                    header: count('.StackLayoutStackChatHeadertitle'),
+                    send: count('.e2e-send-msg-btn')};
+            }"""), timeout=1)
+            log_step(f"组件状态 {label}：{state}")
+        except (PlaywrightError, TimeoutError) as error:
+            log_step(f"组件状态读取失败 {label}：{type(error).__name__}；不改变原操作结果")
 
     def on_popup(popup: Any) -> None:
         """记录新打开的私信标签页，供后续核对聊天界面使用。"""
         popups.append(popup)
+        observe_page(popup, f"新窗口{len(popups)}")
         log_step(f"收到新窗口事件，已记录 {len(popups)} 个新标签页")
 
     # Playwright 会为回调添加映射属性；内置 list.append 不支持属性赋值，必须包装成普通函数。
-    page.on("popup", on_popup)
+    observe_page(page, "用户主页")
+    add_listener(context, "close", on_context_close)
+    add_listener(page, "popup", on_popup)
     try:
         enter_stage("显示主页", "将用户主页标签页置于前台")
         await page.bring_to_front()
@@ -174,6 +286,7 @@ async def open_user_chat(context: Any, author: dict[str, Any],
         buttons = page.locator(f"xpath={private_chat_xpath.strip()}")
         enter_stage("等待私信按钮", "等待配置 XPath 中唯一可见且可用的按钮（10 秒），忽略隐藏匹配")
         button = await wait_for_private_chat_button(buttons, log_step)
+        await log_component_state(page, "点击前")
         enter_stage("点击私信按钮", "入口可用，执行一次点击（10 秒），不自动重试")
         await button.click(timeout=10000)
         log_step("私信按钮点击完成")
@@ -182,6 +295,7 @@ async def open_user_chat(context: Any, author: dict[str, Any],
         target = popups[-1] if popups else page
         log_step(f"新窗口数：{len(popups)}；聊天目标：{'新窗口' if popups else '原主页'}")
         await target.bring_to_front()
+        await log_component_state(target, "点击后")
         enter_stage("检查聊天提示", "检查聊天页面登录、验证及权限提示")
         await check_chat_blockers(target)
         # 输入框和会话标题只用于确认界面打开；昵称会变化，不适合作为账号身份依据。
@@ -193,6 +307,7 @@ async def open_user_chat(context: Any, author: dict[str, Any],
         enter_stage("等待会话标题", f"等待 {CHAT_HEADER} 可见（10 秒）；当前匹配 {await header.count()} 个")
         await header.wait_for(state="visible", timeout=10000)
         log_step("会话标题已可见")
+        await log_component_state(target, "聊天界面出现后")
         nickname = str(user.get("nickname") or author.get("nickname") or "匿名用户")
         # 打开入口仍可人工使用；只有当前聊天 sec_uid 已确认时才允许控制台直接发送。
         enter_stage("核对聊天对象", "读取会话 sec_uid 与目标标识对比，不读取聊天正文")
@@ -207,9 +322,11 @@ async def open_user_chat(context: Any, author: dict[str, Any],
                             if send_ready else "私信界面已打开，但无法确认聊天对象的 sec_uid；请在抖音中核对并手动发送。")}
     except PlaywrightTimeout as error:
         log_step(f"超时：{str(error).splitlines()[0] if str(error) else type(error).__name__}")
+        await log_component_state(target, "超时现场")
         raise RuntimeError(f"用户资料或私信入口未及时加载（阶段：{stage}）。主页已保留，请检查登录、验证、网络或是否有私信权限；不会自动重试") from error
     except PlaywrightError as error:
         log_step(f"浏览器异常：{type(error).__name__}")
+        await log_component_state(target, "浏览器异常现场")
         raise RuntimeError("浏览器或用户页面异常。请检查页面并手动重试；未发送消息") from error
     except asyncio.CancelledError:
         # 外层有总超时；单独记录取消，避免日志只停在某个等待步骤却没有原因。
@@ -220,7 +337,8 @@ async def open_user_chat(context: Any, author: dict[str, Any],
         raise
     finally:
         # 注册和移除使用同一函数对象，确保失败时也不会遗留事件监听器。
-        page.remove_listener("popup", on_popup)
+        for emitter, event, handler in listeners:
+            emitter.remove_listener(event, handler)
         # 保留独立标签页供用户登录、核对和手动发送，不关闭或导航采集中的页面。
 
 
