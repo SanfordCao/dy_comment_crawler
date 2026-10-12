@@ -1574,6 +1574,7 @@
         }
         .video-link-row.removable {grid-template-columns:minmax(0,1fr) 46px 46px}
         .video-link-row button[hidden]{display:none}
+        .video-link-row input[aria-invalid="true"] {border-color:#bd3c32;box-shadow:0 0 0 2px #bd3c321a}
         .video-link-remove {background:#fff1ef;border-color:#ebc2bc;color:#a5322d}
         .video-link-remove:hover:not(:disabled) {background:#fae0dc}
         .queue-actions{display:flex;align-items:center;gap:10px}
@@ -1632,7 +1633,7 @@
                 <h2>采集配置</h2>
                 <div class="field"><label for="url">抖音视频链接</label>
                     <div id="videoLinks" class="video-links"></div>
-                    <small>点击右侧 + 添加链接，最多 100 个；自动去重后按设置采集，空输入框忽略。</small></div>
+                    <small>请粘贴完整分享文本，不接受单独网址（包括带 modal_id 的链接）。启动前解析全部视频链接，全部通过才采集；空输入框忽略。</small></div>
                 <!-- 采集操作常驻设置上方，折叠设置时仍可启动或停止任务。 -->
                 <div class="actions">
                     <button id="start" class="btn primary">启动采集</button>
@@ -1768,33 +1769,31 @@
         <div class="card config-layout">
         <aside class="config-sidebar" role="tablist" aria-label="高级配置分类" aria-orientation="vertical">
             <button id="xpathCategory" class="config-category" type="button" role="tab" aria-selected="true" aria-controls="xpathSettings">XPath配置</button>
-            <button id="otherCategory" class="config-category" type="button" role="tab" aria-selected="false" aria-controls="otherSettings">其他配置</button>
+            <button id="otherCategory" class="config-category" type="button" role="tab" aria-selected="false" aria-controls="otherSettings">接口配置</button>
         </aside>
         <div id="xpathSettings" class="config-panel" role="tabpanel" aria-labelledby="xpathCategory">
-            <h2>页面操作与视频信息 XPath</h2>
-            <p style="margin:-8px 0 20px;color:var(--muted)">采集顺序：打开视频并暂停 → 点击评论图标 → 点击详情 XPath →
-                读取作者昵称和标题 → 点击评论 XPath → 开始采集。XPath 配置保存在本机项目目录中。</p>
+            <h2>页面操作 XPath</h2>
+            <p style="margin:-8px 0 20px;color:var(--muted)">采集顺序：打开独立视频页并暂停 →
+                等待视频信息接口 → 从自动显示的评论列表采集。配置统一保存在本机项目目录中。</p>
             <div class="field"><label for="pauseXpath">暂停按钮 XPath</label><textarea id="pauseXpath" rows="3"></textarea><small>视频打开、登录或验证完成后，先点击此节点暂停视频。已暂停时不会重复点击；留空则跳过，点击失败会记录日志并继续采集。</small>
             </div>
-            <div class="field"><label for="detailXpath">详情按钮 XPath</label><textarea id="detailXpath" rows="3"></textarea><small>评论图标打开后点击此节点，再读取昵称和视频标题。</small>
-            </div>
-            <div class="field"><label for="authorXpath">作者昵称 XPath</label><textarea id="authorXpath" rows="3"
-                                                                                        placeholder="/html/body/.../span"></textarea><small>可定位到作者元素，也可定位到文本或属性节点。</small>
-            </div>
-            <div class="field"><label for="titleXpath">视频标题 XPath</label><textarea id="titleXpath" rows="3"
-                                                                                       placeholder="/html/body/.../h1"></textarea><small>元素节点会读取文本；meta
-                等元素会优先读取 content 属性。</small></div>
-            <div class="field"><label for="commentXpath">评论按钮 XPath</label><textarea id="commentXpath" rows="3"></textarea><small>读取作者和标题后点击此节点，再开始抓取评论。</small>
-            </div>
             <div class="field"><label for="privateChatXpath">私信按钮 XPath</label><textarea id="privateChatXpath" rows="3"></textarea><small>用于用户主页的私信入口，单条和批量私信共用；必须填写并保存，不自动匹配。仍需先核对主页身份。</small></div>
+            <div class="field"><label for="sendMessageXpath">私信发送按钮 XPath</label><textarea id="sendMessageXpath" rows="3"></textarea><small>用于聊天界面的发送按钮，单条和批量私信共用；必须填写并保存，不自动匹配。未配置时不填写或发送消息。</small></div>
             <div class="actions">
                 <button id="saveXpath" class="btn primary">保存配置</button>
                 <button id="clearXpath" class="btn">清空</button>
             </div>
         </div>
         <div id="otherSettings" class="config-panel" role="tabpanel" aria-labelledby="otherCategory" hidden>
-            <h2>其他配置</h2>
-            <p class="config-placeholder">暂无其他配置项。</p>
+            <h2>接口配置</h2>
+            <p style="color:var(--muted)">监听浏览器响应，按接口关键路径匹配，再通过 JSON 路径读取当前视频信息。只接受视频 ID 与当前任务一致的数据，不回退 HTML。</p>
+            <h3>作者昵称</h3>
+            <div class="field"><label for="authorApiPath">接口关键路径</label><input id="authorApiPath" type="text" maxlength="4096"><small>只填写路径，不含域名和查询参数，例如 /aweme/v1/web/aweme/detail/。</small></div>
+            <div class="field"><label for="authorJsonPath">JSON 路径</label><input id="authorJsonPath" type="text" maxlength="4096"><small>例如 aweme_detail.author.nickname；支持点分对象路径和数字数组索引。</small></div>
+            <h3>视频标题</h3>
+            <div class="field"><label for="titleApiPath">接口关键路径</label><input id="titleApiPath" type="text" maxlength="4096"></div>
+            <div class="field"><label for="titleJsonPath">JSON 路径</label><input id="titleJsonPath" type="text" maxlength="4096"><small>例如 aweme_detail.item_title。接口或 JSON 路径留空则停用该字段。</small></div>
+            <div class="actions"><button id="saveApiSettings" class="btn primary" type="button">保存配置</button><button id="clearApiSettings" class="btn" type="button">清空</button></div>
         </div>
         </div>
     </section>
@@ -1864,13 +1863,12 @@
             <h2 id="stoppingTitle">正在停止任务</h2></div>
         <p style="margin-top:12px">请稍候，当前采集操作结束后会自动停止并保存已采集数据。</p></section>
 </div>
-<div id="tabSwitchDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
-    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="tabSwitchTitle"
-             aria-describedby="tabSwitchMessage"><h2 id="tabSwitchTitle">选项卡切换失败</h2>
-        <p id="tabSwitchMessage"></p>
-        <div class="dialog-actions">
-            <button id="closeTabSwitchDialog" class="btn primary" type="button">知道了</button>
-        </div>
+<div id="shareValidationDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="shareValidationTitle">
+        <h2 id="shareValidationTitle">分享文本校验未通过</h2>
+        <p>以下分享文本无效，未启动任何采集任务。请修改后重新点击启动，全部通过后才会开始采集。</p>
+        <div id="shareValidationIssues" style="max-height:40vh;overflow:auto;overflow-wrap:anywhere"></div>
+        <div class="dialog-actions"><button id="closeShareValidationDialog" class="btn primary" type="button">返回修改</button></div>
     </section>
 </div>
 <div id="imagePreview" class="image-preview" role="dialog" aria-modal="true" aria-label="图片预览" aria-hidden="true">
@@ -1903,6 +1901,8 @@
         }
         if (!response.ok) {
             const error = new Error(data?.error || `请求失败 (${response.status})`);
+            error.code = data?.code;
+            error.issues = data?.issues;
             error.licenseFailure = response.status === 403 && ["license_expired", "license_invalid"].includes(data?.code);
             if (error.licenseFailure) showLicenseFailure(error.message);
             throw error;
@@ -2007,6 +2007,7 @@
     }));
 
     let presetData = {selected: "", presets: []}, presetBusy = false, captureRunning = false;
+    let shareValidationPending = false;
     let presetDeleteTarget = null;
     let viewedPreset = "", presetEditing = false, presetCreating = false, activeCaptureSettings = {};
     /** 显示查看/编辑提示，无参数、无返回值，强调预览不等于正在使用。 */
@@ -2216,15 +2217,17 @@
         if (event.target === $("presetDeleteDialog") && !presetBusy) closePresetDeleteDialog();
     };
 
+    /** 回显同一全局配置文件中的按钮 XPath 和视频信息接口路径。 */
     async function loadXpathSettings() {
         try {
             const settings = await api("/api/settings");
             $("pauseXpath").value = settings.pause_xpath || "";
-            $("detailXpath").value = settings.detail_xpath || "";
-            $("authorXpath").value = settings.author_xpath || "";
-            $("titleXpath").value = settings.title_xpath || "";
-            $("commentXpath").value = settings.comment_xpath || "";
-            $("privateChatXpath").value = settings.private_chat_xpath || ""
+            $("authorApiPath").value = settings.author_api_path || "";
+            $("authorJsonPath").value = settings.author_json_path || "";
+            $("titleApiPath").value = settings.title_api_path || "";
+            $("titleJsonPath").value = settings.title_json_path || "";
+            $("privateChatXpath").value = settings.private_chat_xpath || "";
+            $("sendMessageXpath").value = settings.send_message_xpath || ""
         } catch (error) {
             showXpathNotice(error.message, true)
         }
@@ -2234,32 +2237,36 @@
         showNotice(message, error)
     }
 
-    $("saveXpath").onclick = async () => {
+    /** 两个分类共用一次全局保存，防止保存某一类时丢掉另一类配置。 */
+    async function saveGlobalSettings() {
         try {
             await api("/api/settings", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({
                     pause_xpath: $("pauseXpath").value,
-                    detail_xpath: $("detailXpath").value,
-                    author_xpath: $("authorXpath").value,
-                    title_xpath: $("titleXpath").value,
-                    comment_xpath: $("commentXpath").value,
-                    private_chat_xpath: $("privateChatXpath").value
+                    author_api_path: $("authorApiPath").value,
+                    author_json_path: $("authorJsonPath").value,
+                    title_api_path: $("titleApiPath").value,
+                    title_json_path: $("titleJsonPath").value,
+                    private_chat_xpath: $("privateChatXpath").value,
+                    send_message_xpath: $("sendMessageXpath").value
                 })
             });
-            showXpathNotice("XPath 配置已保存，新采集任务和私信操作将使用此配置")
+            showXpathNotice("全局配置已保存，新采集任务和私信操作将使用此配置")
         } catch (error) {
             showXpathNotice(error.message, true)
         }
+    }
+    $("saveXpath").onclick = saveGlobalSettings;
+    $("saveApiSettings").onclick = saveGlobalSettings;
+    $("clearApiSettings").onclick = () => {
+        for (const id of ["authorApiPath", "authorJsonPath", "titleApiPath", "titleJsonPath"]) $(id).value = "";
     };
     $("clearXpath").onclick = () => {
         $("pauseXpath").value = "";
-        $("detailXpath").value = "";
-        $("authorXpath").value = "";
-        $("titleXpath").value = "";
-        $("commentXpath").value = "";
-        $("privateChatXpath").value = ""
+        $("privateChatXpath").value = "";
+        $("sendMessageXpath").value = ""
     };
     $("advancedToggle").onclick = () => {
         const panel = $("advancedSettings"), expanded = panel.hidden;
@@ -2273,6 +2280,43 @@
         $("historyAdvancedToggle").setAttribute("aria-expanded", String(!panel.hidden))
     };
     const videoUrls = () => Array.from($("videoLinks").querySelectorAll("input"), input => input.value.trim()).filter(Boolean);
+
+    /** 从分享文本生成比较键；不同页面地址中相同视频 ID 也视作重复。 */
+    function shareTextKey(value) {
+        const text = value.trim();
+        if (!text) return "";
+        const links = text.match(/https?:\/\/[^\s<>"'，。！？；、（）【】]+/g) || [];
+        if (links.length === 1) {
+            try {
+                const url = new URL(links[0]);
+                if (["douyin.com", "iesdouyin.com"].some(domain => url.hostname === domain || url.hostname.endsWith("." + domain))) {
+                    const pathId = url.pathname.match(/^\/(?:share\/)?video\/(\d+)\/?$/)?.[1];
+                    const ids = new Set([pathId, ...["modal_id", "aweme_id", "item_id"].flatMap(key => url.searchParams.getAll(key))].filter(id => /^\d+$/.test(id || "")));
+                    if (ids.size === 1) return "video:" + [...ids][0];
+                    if (!ids.size && url.hostname === "v.douyin.com") return "short:" + url.hostname + url.pathname.replace(/\/$/, "") + url.search;
+                }
+            } catch { /* 非法链接留给启动前完整校验，不在输入过程中猜测视频。 */ }
+        }
+        return "text:" + text.replace(/\s+/g, " ");
+    }
+
+    /** 清空后输入的重复项；启动前兜底扫描时保留每个视频的首行。 */
+    function checkDuplicateShareTexts(changedInput = null) {
+        const inputs = Array.from($("videoLinks").querySelectorAll("input")), duplicates = [], seen = new Map();
+        for (const [index, input] of inputs.entries()) {
+            if (changedInput && input !== changedInput) continue;
+            const key = shareTextKey(input.value);
+            if (!key) continue;
+            const previous = changedInput ? inputs.findIndex(other => other !== input && shareTextKey(other.value) === key) : seen.get(key);
+            if (previous !== undefined && previous !== -1) {
+                duplicates.push(`第 ${index + 1} 条与第 ${previous + 1} 条重复`);
+                input.value = "";
+                input.removeAttribute("aria-invalid");
+            } else seen.set(key, index);
+        }
+        if (duplicates.length) showNotice(`${duplicates.join("；")}，已清空重复输入框`, true);
+        return duplicates.length > 0;
+    }
 
     /** 按行数同步操作：单行仅加号，多行仅末行保留加号，所有行可删除。 */
     function syncVideoLinkButtons() {
@@ -2299,10 +2343,16 @@
         const row = document.createElement("div"), input = document.createElement("input"),
             add = document.createElement("button");
         row.className = "video-link-row";
-        input.type = "url";
-        input.placeholder = "https://www.douyin.com/video/...";
+        // 分享文字不是 URL，使用文本输入让后端统一提取和校验，避免浏览器提前拒绝。
+        input.type = "text";
+        input.placeholder = "请粘贴抖音完整分享文本";
+        input.maxLength = 16384;
         input.autocomplete = "off";
         input.value = value;
+        input.oninput = () => {
+            input.removeAttribute("aria-invalid");
+            checkDuplicateShareTexts(input);
+        };
         input.setAttribute("aria-label", "抖音视频链接");
         if (!box.children.length) input.id = "url";
         add.type = "button";
@@ -2342,36 +2392,75 @@
     }
 
     setVideoLinks([""]);
-    const notifiedBatchTabErrors = new Set();
 
     function restoreBatch(batch) {
         renderBatch(batch);
         if (!batch || !["running", "stopping"].includes(batch.status)) return;
-        setVideoLinks(batch.items.filter(item => ["pending", "running", "waiting_for_user", "stopping"].includes(item.status)).map(item => item.url));
+        setVideoLinks(batch.items.filter(item => ["pending", "running", "waiting_for_user", "stopping"].includes(item.status)).map(item => item.share_text || item.url));
     }
+
+    /** 按原输入行号显示所有错误，外部分享内容仅作为纯文本插入。 */
+    function showShareValidationDialog(issues) {
+        const list = $("shareValidationIssues"), inputs = Array.from($("videoLinks").querySelectorAll("input"));
+        list.replaceChildren();
+        inputs.forEach(input => input.removeAttribute("aria-invalid"));
+        for (const issue of issues || []) {
+            const entry = document.createElement("p");
+            entry.style.whiteSpace = "pre-line";
+            entry.textContent = `第 ${issue.row} 条：${issue.reason}${issue.text ? "\n" + issue.text : ""}`;
+            list.append(entry);
+            inputs[issue.row - 1]?.setAttribute("aria-invalid", "true");
+            // 不同短链需后台解析后才能确认重复，只清空服务器明确标记的重复行。
+            if (issue.clear_input && inputs[issue.row - 1]) inputs[issue.row - 1].value = "";
+        }
+        $("shareValidationDialog").classList.add("show");
+        $("shareValidationDialog").setAttribute("aria-hidden", "false");
+        $("closeShareValidationDialog").focus();
+    }
+
+    /** 关闭提示后定位第一条无效输入，保留全部已粘贴内容供修改。 */
+    function closeShareValidationDialog() {
+        $("shareValidationDialog").classList.remove("show");
+        $("shareValidationDialog").setAttribute("aria-hidden", "true");
+        $("videoLinks").querySelector('input[aria-invalid="true"]')?.focus();
+    }
+    $("closeShareValidationDialog").onclick = closeShareValidationDialog;
+    $("shareValidationDialog").onclick = event => {
+        if (event.target === $("shareValidationDialog")) closeShareValidationDialog();
+    };
 
     $("start").onclick = async () => {
         if (licenseFailure) {showLicenseFailure(licenseFailure);return;}
         const button = $("start");
+        if (shareValidationPending) return;
+        if (checkDuplicateShareTexts()) return;
+        shareValidationPending = true;
         button.disabled = true;
+        button.textContent = "正在校验分享文本…";
+        $("videoLinks").querySelectorAll("input,button").forEach(el => el.disabled = true);
         try {
             await captureSaveChain;
             // 启动只使用已保存且正在使用的参数，绝不读取其他方案的预览/草稿。
-            const options = {...payload(), ...activeCaptureSettings}, urls = videoUrls();
-            if (!urls.length) throw new Error("请先填写抖音视频链接");
-            if (urls.length === 1) options.url = urls[0]; else {
-                options.urls = urls;
-                delete options.url
-            }
+            const options = {...payload(), ...activeCaptureSettings};
+            // 不过滤空行，以便服务端返回的行号与实际输入框保持一致。
+            options.share_texts = Array.from($("videoLinks").querySelectorAll("input"), input => input.value.trim());
+            delete options.url;
+            delete options.urls;
             await api("/api/crawl/start", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify(options)
             });
+            captureRunning = true;
             showNotice(options.concurrent ? `任务已启动，最多同时采集 ${options.concurrency_limit} 个视频` : "任务已启动，视频将按顺序采集")
         } catch (error) {
-            if (!error.licenseFailure) showNotice(error.message, true);
-            button.disabled = Boolean(licenseFailure)
+            if (error.code === "share_validation_failed") showShareValidationDialog(error.issues);
+            else if (!error.licenseFailure) showNotice(error.message, true);
+        } finally {
+            shareValidationPending = false;
+            button.textContent = "启动采集";
+            button.disabled = Boolean(licenseFailure) || captureRunning;
+            $("videoLinks").querySelectorAll("input,button").forEach(el => el.disabled = captureRunning);
         }
     };
 
@@ -2441,11 +2530,6 @@
             url.title = item.url;
             row.append(head, url);
             if (item.error) {
-                const key = `${item.batchId}:${item.url}`;
-                if (item.error.startsWith("选项卡切换失败") && !notifiedBatchTabErrors.has(key)) {
-                    notifiedBatchTabErrors.add(key);
-                    showTabSwitchDialog(item.error)
-                }
                 const error = document.createElement("div");
                 error.className = "batch-item-error";
                 error.textContent = item.error;
@@ -2512,19 +2596,6 @@
         $("stoppingDialog").setAttribute("aria-hidden", String(!show))
     }
 
-    function showTabSwitchDialog(message) {
-        $("tabSwitchMessage").textContent = message;
-        $("tabSwitchDialog").classList.add("show");
-        $("tabSwitchDialog").setAttribute("aria-hidden", "false");
-        $("closeTabSwitchDialog").focus()
-    }
-
-    function closeTabSwitchDialog() {
-        $("tabSwitchDialog").classList.remove("show");
-        $("tabSwitchDialog").setAttribute("aria-hidden", "true")
-    }
-
-    $("closeTabSwitchDialog").onclick = closeTabSwitchDialog;
     let oldLogMarker = null;
     let hideOldLogs = false;
     let hideInitialFinishedStatus = false;
@@ -2595,11 +2666,14 @@
             $("dot").className = `dot ${state.status}`;
             $("waiting").classList.toggle("show", state.status === "waiting_for_user");
             const active = ["starting", "running", "waiting_for_user", "stopping"].includes(state.status);
+            const validating = shareValidationPending || state.share_validation_running;
+            if (validating) $("statusText").textContent = "正在校验全部分享文本，通过后才开始采集";
             captureRunning = active;
             syncPresetControls();
-            $("start").disabled = active || presetBusy;
+            $("start").disabled = active || presetBusy || validating;
+            $("start").textContent = validating ? "正在校验分享文本…" : "启动采集";
             $("stop").disabled = !active;
-            $("videoLinks").querySelectorAll("input,button").forEach(el => el.disabled = active);
+            $("videoLinks").querySelectorAll("input,button").forEach(el => el.disabled = active || validating);
             $("stop").textContent = state.batch?.items?.length > 1 ? "停止整批" : "停止任务";
             const logs = visibleLogs(state.logs || []);
             renderTaskLogs(state.task_logs || [], logs);
@@ -2608,7 +2682,7 @@
                 loadRuns()
             }
             if (lastStatus !== state.status && state.status === "failed") {
-                if (state.message.startsWith("选项卡切换失败")) showTabSwitchDialog(state.message); else showNotice(state.message, true)
+                showNotice(state.message, true)
             }
             lastStatus = state.status
         } catch {
@@ -2814,13 +2888,14 @@
     };
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
-        if ($('bulkChatDialog').classList.contains('show')) closeBulkChatDialog();
+        if ($('shareValidationDialog').classList.contains('show')) closeShareValidationDialog();
+        else if ($('bulkChatDialog').classList.contains('show')) closeBulkChatDialog();
         else if ($('chatDialog').classList.contains('show')) closeChatDialog();
         else if ($('presetNameDialog').classList.contains('show')) {
             if (!presetBusy) closePresetNameDialog();
         } else if ($('presetDeleteDialog').classList.contains('show')) {
             if (!presetBusy) closePresetDeleteDialog();
-        } else if ($('imagePreview').classList.contains('show')) closeImagePreview(); else if ($('tabSwitchDialog').classList.contains('show')) closeTabSwitchDialog(); else if ($('deleteDialog').classList.contains('show')) closeDeleteDialog()
+        } else if ($('imagePreview').classList.contains('show')) closeImagePreview(); else if ($('deleteDialog').classList.contains('show')) closeDeleteDialog()
     });
 
     function openImagePreview(source, alt) {

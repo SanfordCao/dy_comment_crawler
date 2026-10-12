@@ -19,6 +19,7 @@ from playwright.async_api import (
 )
 
 try:
+    from .video_metadata import VideoMetadataCollector, METADATA_DEFAULTS
     from .comments import (
         CommentStore,
         extract_pagination,
@@ -34,6 +35,7 @@ try:
         write_result_json,
     )
 except ImportError:  # Support direct execution from the package directory.
+    from video_metadata import VideoMetadataCollector, METADATA_DEFAULTS
     from comments import (
         CommentStore,
         extract_pagination,
@@ -75,11 +77,11 @@ class CrawlerConfig:
     max_delay_ms: int = 1_400
     scroll_pixels: int = 700
     challenge_wait_minutes: int = 30
-    detail_xpath: str = ""
     pause_xpath: str = ""
-    author_xpath: str = ""
-    title_xpath: str = ""
-    comment_xpath: str = ""
+    author_api_path: str = METADATA_DEFAULTS["author_api_path"]
+    author_json_path: str = METADATA_DEFAULTS["author_json_path"]
+    title_api_path: str = METADATA_DEFAULTS["title_api_path"]
+    title_json_path: str = METADATA_DEFAULTS["title_json_path"]
     non_interactive: bool = False
     close_page: bool = True
     action_timeout_ms: int = 10_000
@@ -140,11 +142,8 @@ def _initial_result(
             "max_minutes": config.max_minutes,
             "delay_ms": [config.min_delay_ms, config.max_delay_ms],
             "challenge_wait_minutes": config.challenge_wait_minutes,
-            "detail_xpath": config.detail_xpath,
             "pause_xpath": config.pause_xpath,
-            "author_xpath": config.author_xpath,
-            "title_xpath": config.title_xpath,
-            "comment_xpath": config.comment_xpath,
+            **{key: getattr(config, key) for key in METADATA_DEFAULTS},
         },
         "summary": {
             "comment_count": 0,
@@ -407,129 +406,6 @@ async def _find_blocking_state(page: Page) -> str:
     return match.group(0) if match else ""
 
 
-async def _extract_video_metadata(
-    page: Page,
-    author_xpath: str = "",
-    title_xpath: str = "",
-) -> dict[str, str]:
-    try:
-        metadata = await page.evaluate(
-            """
-            config => {
-              const read = element => {
-                if (!element) return "";
-                return (element.getAttribute("content") || element.innerText ||
-                  element.textContent || "").replace(/\\s+/g, " ").trim();
-              };
-              const firstText = selectors => {
-                for (const selector of selectors) {
-                  const element = document.querySelector(selector);
-                  const value = read(element);
-                  if (value) return value;
-                }
-                return "";
-              };
-              const readXPath = expression => {
-                if (!expression) return "";
-                try {
-                  const node = document.evaluate(expression, document, null,
-                    XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                  if (!node) return "";
-                  if (node.nodeType === Node.ATTRIBUTE_NODE || node.nodeType === Node.TEXT_NODE) {
-                    return String(node.nodeValue || "").replace(/\\s+/g, " ").trim();
-                  }
-                  return (node.getAttribute?.("content") || node.innerText || node.textContent || "")
-                    .replace(/\\s+/g, " ").trim();
-                } catch { return ""; }
-              };
-              let title = readXPath(config.titleXPath) || firstText([
-                '[data-e2e="video-desc"]',
-                '[data-e2e="video-title"]',
-                'meta[property="og:title"]',
-                'meta[name="twitter:title"]',
-                'meta[name="description"]'
-              ]);
-              if (!title) title = document.title || "";
-              title = title.replace(/\\s*[-|_·]\\s*抖音.*$/, "").trim();
-              let publisher = readXPath(config.authorXPath) || firstText([
-                '[data-e2e="video-author-nickname"]',
-                '[data-e2e="video-author-name"]',
-                'a[data-e2e="video-author"]',
-                '[data-e2e="video-author"]',
-                'meta[name="author"]'
-              ]);
-
-              const currentId = new URL(location.href).searchParams.get("modal_id") ||
-                (location.pathname.match(/\\/(?:video|note)\\/(\\d+)/) || [])[1] || "";
-              const candidates = [];
-              const seen = new Set();
-              const visit = (value, depth, context) => {
-                if (!value || typeof value !== "object" || depth > 18 || seen.has(value)) return;
-                seen.add(value);
-                if (!Array.isArray(value)) {
-                  const author = value.author || value.user || value.author_info || {};
-                  const desc = value.desc || value.description || value.video_title || value.title || "";
-                  const nickname = author.nickname || author.nick_name || author.name || "";
-                  if (desc || nickname) {
-                    const id = String(value.aweme_id || value.awemeId || value.item_id || "");
-                    const score = (currentId && id === currentId ? 100 : 0) +
-                      (context ? 25 : 0) + (desc ? 5 : 0) + (nickname ? 5 : 0);
-                    candidates.push({id, desc: String(desc), nickname: String(nickname), score});
-                  }
-                  for (const [key, child] of Object.entries(value)) {
-                    const keyContext = context || /aweme.?detail|video.?detail|item.?detail/i.test(key);
-                    visit(child, depth + 1, keyContext);
-                  }
-                } else {
-                  for (const child of value) visit(child, depth + 1, context);
-                }
-              };
-              const parseScript = raw => {
-                if (!raw || raw.length > 4_000_000) return;
-                const variants = [raw.trim()];
-                try { variants.push(decodeURIComponent(raw.trim())); } catch {}
-                for (let text of variants) {
-                  try { visit(JSON.parse(text), 0, false); continue; } catch {}
-                  const start = text.search(/[\\[{]/);
-                  const end = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
-                  if (start >= 0 && end > start) {
-                    try { visit(JSON.parse(text.slice(start, end + 1)), 0, false); } catch {}
-                  }
-                }
-              };
-              for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
-                parseScript(script.textContent || "");
-              }
-              for (const script of document.querySelectorAll("script")) {
-                const id = script.id || "";
-                const raw = script.textContent || "";
-                if (/ld\\+json/i.test(script.type || "") ||
-                    /render_data|router_data|initial|state/i.test(id) ||
-                    /aweme_detail|awemeDetail|RENDER_DATA|aweme_id/.test(raw.slice(0, 200_000))) {
-                  parseScript(raw);
-                }
-              }
-              candidates.sort((a, b) => b.score - a.score);
-              const embedded = candidates[0] || {};
-              if (!title || /^(抖音|精选|首页)$/.test(title)) title = embedded.desc || title;
-              if (!publisher) publisher = embedded.nickname || "";
-              return {video_title: title, video_publisher_nickname: publisher};
-            }
-            """,
-            {"authorXPath": author_xpath, "titleXPath": title_xpath},
-        )
-    except Exception:
-        return {"video_title": "", "video_publisher_nickname": ""}
-    if not isinstance(metadata, dict):
-        return {"video_title": "", "video_publisher_nickname": ""}
-    return {
-        "video_title": str(metadata.get("video_title") or "").strip(),
-        "video_publisher_nickname": str(
-            metadata.get("video_publisher_nickname") or ""
-        ).strip(),
-    }
-
-
 async def _wait_for_manual_challenge(
     page: Page,
     config: CrawlerConfig,
@@ -564,48 +440,11 @@ async def _wait_for_manual_challenge(
         raise RuntimeError(f"页面仍显示登录或风控验证：{remaining}")
 
 
-async def _try_open_comment_panel(page: Page) -> bool:
-    selectors = (
-        '[data-e2e="feed-comment-icon"]',
-        '[data-e2e="comment-icon"]',
-        'button[aria-label*="评论"]',
-        '[role="button"][aria-label*="评论"]',
-    )
-    for selector in selectors:
-        targets = page.locator(selector)
-        try:
-            # 网络慢时，评论图标可能在页面主结构加载后才渲染出来。
-            await targets.first.wait_for(state="attached", timeout=15_000)
-            count = await targets.count()
-        except Exception as error:
-            print(f"[评论区] 等待图标失败：{selector}（{error}）")
-            continue
-
-        for index in range(count):
-            target = targets.nth(index)
-            try:
-                if not await target.is_visible():
-                    continue
-                await target.scroll_into_view_if_needed(timeout=5_000)
-                try:
-                    await target.click(timeout=5_000)
-                except Exception:
-                    # 部分抖音页面的 SVG 动画层会拦截常规点击；直接触发该图标的
-                    # DOM click，仍由页面自身事件处理器打开评论区。
-                    await target.evaluate("element => element.click()")
-                await page.wait_for_timeout(3_000)
-                print(f"[评论区] 已点击打开图标：{selector}（第 {index + 1} 个）")
-                return True
-            except Exception as error:
-                print(
-                    f"[评论区] 点击图标失败：{selector}"
-                    f"（第 {index + 1} 个，{error}）"
-                )
-    print("[评论区] 未找到可点击的评论图标")
-    return False
 
 
 async def _pause_configured_video(page: Page, config: CrawlerConfig) -> bool:
+    """输出暂停配置并安全执行暂停，避免重复点击将视频恢复播放。"""
+    print(f"[按钮配置] 暂停按钮 pause_xpath = {config.pause_xpath.strip() or '（未配置）'}")
     if not config.pause_xpath.strip():
         print("[视频暂停] 未配置暂停按钮 XPath，跳过自动暂停")
         return False
@@ -642,49 +481,6 @@ async def _pause_configured_video(page: Page, config: CrawlerConfig) -> bool:
         return False
 
 
-async def _click_configured_xpath(
-    page: Page,
-    xpath: str,
-    label: str,
-    expected_tab_key: str,
-) -> bool:
-    if not xpath.strip():
-        print(f"[{label}] 未配置 XPath")
-        return False
-    target = page.locator(f"xpath={xpath.strip()}").first
-    try:
-        await target.wait_for(state="attached", timeout=10_000)
-        if not await target.is_visible():
-            print(f"[{label}] XPath 节点不可见")
-            return False
-        tab_key = await target.evaluate(
-            """element => {
-              const tab = element.closest('[role="tab"]');
-              return tab?.getAttribute('data-tabkey') ||
-                element.getAttribute('data-tabkey') || element.id || '';
-            }"""
-        )
-        if tab_key != expected_tab_key:
-            print(
-                f"[{label}] XPath 未定位到预期选项卡 {expected_tab_key} "
-                f"（实际：{tab_key or '非选项卡节点'}）"
-            )
-            return False
-        await target.scroll_into_view_if_needed(timeout=5_000)
-        await target.click(timeout=5_000)
-        await page.wait_for_function(
-            """key => {
-              const tab = document.querySelector(`[role="tab"][data-tabkey="${key}"]`);
-              return tab && tab.getAttribute("aria-selected") === "true";
-            }""",
-            arg=expected_tab_key,
-            timeout=5_000,
-        )
-        print(f"[{label}] 已通过配置的 XPath 点击并确认选中")
-        return True
-    except Exception as error:
-        print(f"[{label}] XPath 点击或选中验证失败：{error}")
-        return False
 
 
 async def _current_viewport(page: Page) -> dict[str, int] | None:
@@ -1512,6 +1308,7 @@ async def crawl_douyin_comments(
 
     page: Page | None = None
     collector: CommentResponseCollector | None = None
+    metadata_collector: VideoMetadataCollector | None = None
     playwright_instance = None
     owned_context = False
     context: BrowserContext | None = None
@@ -1559,6 +1356,11 @@ async def crawl_douyin_comments(
             include_all_levels=config.comment_scope == "all",
         )
         collector.attach()
+        metadata_collector = VideoMetadataCollector(
+            page, aweme_id, {key: getattr(config, key) for key in METADATA_DEFAULTS},
+            result, response_state.warnings,
+        )
+        metadata_collector.attach()
 
         print(
             "[采集模式] "
@@ -1594,30 +1396,13 @@ async def crawl_douyin_comments(
             response_state.warnings.add("自动暂停视频失败，请检查暂停按钮 XPath")
         await collector.drain()
 
-        # 执行顺序：评论图标 -> 详情 XPath -> 读取视频信息 -> 评论 XPath。
-        await _try_open_comment_panel(page)
-        if not await _click_configured_xpath(
-            page, config.detail_xpath, "详情", "semiTabdetail_tab"
-        ):
-            raise RuntimeError(
-                "选项卡切换失败：详情；请检查高级配置中的详情按钮 XPath"
-            )
-        await _randomized_pause(config)
-        video_metadata = await _extract_video_metadata(
-            page, config.author_xpath, config.title_xpath
-        )
-        result.update(video_metadata)
+        # 独立视频页自动显示评论列表，无需点击图标；接口监听已在导航前注册。
+        await metadata_collector.wait(config.action_timeout_ms, config.stop_requested)
         print(
             "[视频信息] 发布者："
-            f"{video_metadata['video_publisher_nickname'] or '未获取到'}；"
-            f"标题：{video_metadata['video_title'] or '未获取到'}"
+            f"{result['video_publisher_nickname'] or '未获取到'}；"
+            f"标题：{result['video_title'] or '未获取到'}"
         )
-        if not await _click_configured_xpath(
-            page, config.comment_xpath, "评论", "semiTabcomment"
-        ):
-            raise RuntimeError(
-                "选项卡切换失败：评论；请检查高级配置中的评论按钮 XPath"
-            )
         await _randomized_pause(config)
         await collector.drain()
         _checkpoint(run_directory, result, store, response_state)
@@ -1709,6 +1494,8 @@ async def crawl_douyin_comments(
         setattr(error, "run_directory", run_directory)
         raise
     finally:
+        if metadata_collector is not None:
+            await metadata_collector.close()
         if collector is not None:
             collector.detach()
         if owned_context and context is not None:

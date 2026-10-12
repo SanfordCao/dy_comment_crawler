@@ -10,7 +10,7 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from tempfile import TemporaryDirectory
 from typing import Any, Callable
-from urllib.parse import quote, unquote, urlparse, parse_qs
+from urllib.parse import quote, unquote, urlparse
 from uuid import uuid4
 import asyncio
 import json
@@ -30,12 +30,16 @@ try:
     from .private_chat_batch import PrivateChatBatch
     from .export_comments_excel import export_comments_to_excel, export_comment_rows
     from .output import read_result_json
+    from .video_links import resolve_video_link, parse_share_texts, resolve_share_rows, ShareValidationError
+    from .video_metadata import METADATA_DEFAULTS, validate_metadata_settings
 except ImportError:
     from crawler import CrawlerConfig, crawl_douyin_comments
     from browser_session import BrowserSession
     from private_chat import open_user_chat, send_user_message, validated_message, validated_sec_uid
     from private_chat_batch import PrivateChatBatch
     from export_comments_excel import export_comments_to_excel, export_comment_rows
+    from video_links import resolve_video_link, parse_share_texts, resolve_share_rows, ShareValidationError
+    from video_metadata import METADATA_DEFAULTS, validate_metadata_settings
 from output import read_result_json
 
 
@@ -143,19 +147,15 @@ class ConsoleState:
         self.private_chat_batch = PrivateChatBatch(
             self.browser_session, self.chat_lock,
             private_chat_xpath=lambda: self.get_xpath_settings().get("private_chat_xpath", ""),
+            send_message_xpath=lambda: self.get_xpath_settings().get("send_message_xpath", ""),
         )
         self.settings_path = console_config_dir(self.project_root) / "web_console_settings.json"
         legacy_settings_path = self.project_root / "web_console_settings.json"
         self.xpath_settings = {
             "pause_xpath": "",
-            "detail_xpath": (
-                "/html/body/div[2]/div[1]/div[4]/div[3]/div/div[3]/div[1]/"
-                "div[1]/div/div[1]/div/div[4]/div/div/div[1]/div[1]/div[1]/div[1]/span"
-            ),
-            "author_xpath": "",
-            "title_xpath": "",
-            "comment_xpath": "",
+            **METADATA_DEFAULTS,
             "private_chat_xpath": "",
+            "send_message_xpath": "",
         }
         settings_source = (
             self.settings_path
@@ -178,7 +178,19 @@ class ConsoleState:
                     legacy_settings_path.replace(self.settings_path)
             except OSError:
                 pass
+        # 只保留当前支持的全局字段；升级后自动清理旧配置，不要求用户再次保存。
+        try:
+            current = json.loads(self.settings_path.read_text(encoding="utf-8"))
+            if isinstance(current, dict) and set(current) != set(self.xpath_settings):
+                self.settings_path.write_text(
+                    json.dumps(self.xpath_settings, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+        except (OSError, json.JSONDecodeError):
+            pass
         self.lock = Lock()
+        self.start_lock = Lock()
+        self.share_validation_running = False
         self.status = "idle"
         self.message = "等待开始"
         self.logs: list[str] = []
@@ -399,27 +411,9 @@ class ConsoleState:
 
     @staticmethod
     def video_urls(options: dict[str, Any]) -> list[str]:
-        raw = options.get("urls", [options.get("url", "")])
-        if not isinstance(raw, list) or not raw or len(raw) > 100:
-            raise ValueError("请填写 1 至 100 个视频链接")
-        urls, seen = [], set()
-        for value in raw:
-            if not isinstance(value, str):
-                raise ValueError("视频链接必须是文本")
-            url = value.strip()
-            parsed = urlparse(url)
-            hostname = (parsed.hostname or "").lower()
-            if len(url) > 4096 or parsed.scheme not in {"http", "https"} or not (
-                hostname == "douyin.com" or hostname.endswith(".douyin.com")
-            ) or parsed.username or parsed.password:
-                raise ValueError(f"请输入有效的 douyin.com 视频地址：{url[:80]}")
-            video_id = parse_qs(parsed.query).get("modal_id", [None])[0]
-            match = re.search(r"/video/(\d+)", parsed.path)
-            key = (match.group(1) if match else video_id) or url
-            if key not in seen:
-                seen.add(key)
-                urls.append(url)
-        return urls
+        """只接受完整分享文本，提取链接时保留独立的逐行校验。"""
+        raw = options.get("share_texts", options.get("urls", [options.get("url", "")]))
+        return list(dict.fromkeys(row["url"] for row in parse_share_texts(raw)))
 
     def log(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -433,13 +427,14 @@ class ConsoleState:
             self.logs.clear()
 
     def get_xpath_settings(self) -> dict[str, str]:
+        """返回全局按钮 XPath 与接口解析配置的副本。"""
         with self.lock:
             return dict(self.xpath_settings)
 
     def save_xpath_settings(self, payload: dict[str, Any]) -> dict[str, str]:
-        """验证并持久化全局 XPath，采集和私信均从此配置读取。"""
-        settings: dict[str, str] = {}
-        for key in ("pause_xpath", "detail_xpath", "author_xpath", "title_xpath", "comment_xpath", "private_chat_xpath"):
+        """验证并持久化全局按钮及接口配置，旧昵称/标题 XPath 不再保存。"""
+        settings: dict[str, str] = validate_metadata_settings(payload)
+        for key in ("pause_xpath", "private_chat_xpath", "send_message_xpath"):
             value = payload.get(key, "")
             if not isinstance(value, str) or len(value) > 4_096:
                 raise ValueError(f"{key} 必须是 4096 字符以内的 XPath 文本")
@@ -545,6 +540,7 @@ class ConsoleState:
                                       "logs": list(logs)})
             return {
                 "status": status,
+                "share_validation_running": self.share_validation_running,
                 "message": message,
                 "logs": list(self.logs),
                 "run_name": self.run_name,
@@ -554,9 +550,40 @@ class ConsoleState:
             }
 
     def start(self, options: dict[str, Any]) -> None:
+        """全量校验通过后才入队；失败不保存任务，不启动任何视频采集。"""
+        rows = parse_share_texts(options.get("share_texts", options.get("urls", [options.get("url", "")])))
+        options = {**self.get_capture_settings(), **options}
+        self._validated_capture_settings(options)
+        if not self.start_lock.acquire(blocking=False):
+            raise RuntimeError("正在校验另一批分享文本，请等待校验结束")
+        try:
+            with self.lock:
+                if self.capture_authorization is None:
+                    raise LicenseError("无法验证授权，不允许启动采集")
+                self.capture_authorization()
+                if self.worker is not None and self.worker.is_alive():
+                    raise RuntimeError("已有抓取任务正在运行")
+                self.share_validation_running = True
+            # 校验只有请求解析，不开采集浏览器；队列和日志直到全部通过后才创建。
+            timeout = 45 + 30 * ((len(rows) + 2) // 3)
+            try:
+                resolved = self.browser_session.run(resolve_share_rows(rows), timeout=timeout)
+            except RuntimeError as error:
+                raise ShareValidationError([
+                    {"row": row["row"], "text": row["share_text"][:160], "reason": str(error)}
+                    for row in rows
+                ]) from error
+            self._start_validated(options, resolved)
+        finally:
+            with self.lock:
+                self.share_validation_running = False
+            self.start_lock.release()
+
+    def _start_validated(self, options: dict[str, Any], rows: list[dict[str, Any]]) -> None:
         """创建采集队列前重新验证授权，失败不保存配置或启动线程。"""
         options = {**self.get_capture_settings(), **options}
-        urls = self.video_urls(options)
+        urls = [row["resolved_url"] for row in rows]
+        row_by_url = {row["resolved_url"]: row for row in rows}
         capture_settings = self._validated_capture_settings(options)
         if options.get("comment_scope", "top_level") not in {"top_level", "all"}:
             raise ValueError("评论层级选项无效")
@@ -590,8 +617,9 @@ class ConsoleState:
             self.batch = {
                 "id": datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid4().hex[:8],
                 "status": "running", "current_index": 0,
-                "options": {key: value for key, value in options.items() if key not in {"url", "urls"}},
-                "items": [{"url": url, "status": "pending", "run_name": None, "error": ""} for url in urls],
+                "options": {key: value for key, value in options.items() if key not in {"url", "urls", "share_texts"}},
+                "items": [{"url": url, "share_text": row_by_url[url]["share_text"],
+                           "resolved_url": url, "status": "pending", "run_name": None, "error": ""} for url in urls],
             }
             if unfinished:
                 self.batch["unfinished_batches"] = unfinished
@@ -668,9 +696,18 @@ class ConsoleState:
                 self._save_batch_locked()
 
         try:
+            print(f"解析视频链接：{item['url']}")
+            resolved_url = await resolve_video_link(context, item["url"], stopped)
+            if stopped():
+                raise RuntimeError("任务已停止，未开始采集")
+            with self.lock:
+                # 原 URL 是任务停止和日志的索引，只记录解析结果，不替换索引。
+                item["resolved_url"] = resolved_url
+                self._save_batch_locked()
+            print(f"视频链接已确认：{resolved_url}")
             options = {**options, **self.get_xpath_settings()}
             config = CrawlerConfig(
-                url=item["url"], output_root=self.output_root, profile_dir=self.profile_dir,
+                url=resolved_url, output_root=self.output_root, profile_dir=self.profile_dir,
                 browser_context=context, require_initial_login=first_login[0],
                 scroll_direction=str(options.get("scroll_direction", "down")),
                 comment_scope=str(options.get("comment_scope", "top_level")),
@@ -683,9 +720,9 @@ class ConsoleState:
                 max_delay_ms=int(options.get("max_delay_ms", 1400)),
                 scroll_pixels=int(options.get("scroll_pixels", 700)),
                 challenge_wait_minutes=int(options.get("challenge_wait_minutes", 30)),
-                pause_xpath=options["pause_xpath"], detail_xpath=options["detail_xpath"],
-                author_xpath=options["author_xpath"], title_xpath=options["title_xpath"],
-                comment_xpath=options["comment_xpath"], manual_continue=manual_continue,
+                pause_xpath=options["pause_xpath"],
+                **{key: options[key] for key in METADATA_DEFAULTS},
+                manual_continue=manual_continue,
                 stop_requested=stopped,
                 run_directory_ready=lambda directory: self._register_task_run(index, directory),
             )
@@ -912,7 +949,10 @@ class ConsoleState:
             # 在排入浏览器循环前消费凭据，HTTP 超时或重复点击也不会补发。
             session["used"] = True
             try:
-                return self.browser_session.run(send_user_message(session["page"], session["sec_uid"], message), timeout=35)
+                return self.browser_session.run(send_user_message(
+                    session["page"], session["sec_uid"], message,
+                    send_message_xpath=self.get_xpath_settings().get("send_message_xpath", ""),
+                ), timeout=35)
             except RuntimeError:
                 raise
             except Exception as error:
@@ -1275,6 +1315,8 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True})
                 return
             self.send_error(404)
+        except ShareValidationError as error:
+            self._json(400, {"error": str(error), "code": "share_validation_failed", "issues": error.issues})
         except LicenseError as error:
             self._license_denied(str(error))
         except (ValueError, FileNotFoundError, OSError, RuntimeError, json.JSONDecodeError) as error:

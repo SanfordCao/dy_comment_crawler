@@ -18,12 +18,14 @@ class PrivateChatBatch:
     """管理一个内存批次，与单条私信共享互斥锁，不影响评论采集调度。"""
 
     def __init__(self, browser_session: Any, chat_lock: Any,
-                 private_chat_xpath: Callable[[], str] | None = None) -> None:
+                 private_chat_xpath: Callable[[], str] | None = None,
+                 send_message_xpath: Callable[[], str] | None = None) -> None:
         """初始化状态、停止信号和请求去重；不启动浏览器或发送消息。"""
         self.browser_session = browser_session
         self.chat_lock = chat_lock
         # 使用全局配置读取函数，避免批量私信另存一份 XPath 导致配置不一致。
         self.private_chat_xpath = private_chat_xpath or (lambda: "")
+        self.send_message_xpath = send_message_xpath or (lambda: "")
         self.lock = Lock()
         self.stop_event = Event()
         self.worker: Thread | None = None
@@ -103,7 +105,8 @@ class PrivateChatBatch:
             return {"status": "cancelled", "message": "已停止，未发送"}
         if not ready:
             raise RuntimeError("未能核对聊天对象 sec_uid，已停止后续发送")
-        return await send_user_message(ready["page"], ready["sec_uid"], message)
+        return await send_user_message(ready["page"], ready["sec_uid"], message,
+                                       send_message_xpath=self.send_message_xpath())
 
     def _run(self, authors: list[dict[str, Any]], message: str) -> None:
         """逐位发送相同内容，失败不重试；验证或不确定结果中止剩余任务。"""

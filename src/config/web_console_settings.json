@@ -1,8 +1,9 @@
 {
+  "author_api_path": "/aweme/v1/web/aweme/detail/",
+  "author_json_path": "aweme_detail.author.nickname",
+  "title_api_path": "/aweme/v1/web/aweme/detail/",
+  "title_json_path": "aweme_detail.item_title",
   "pause_xpath": "(//xg-icon[contains(concat(' ', normalize-space(@class), ' '), ' xgplayer-play ')])[1]",
-  "detail_xpath": "//*[@role='tab' and @data-tabkey='semiTabdetail_tab']",
-  "author_xpath": "//div[contains(@class,'wWJV9hON')]/span[1]",
-  "title_xpath": "//div[contains(@class,'EVDAy35S')]//span[contains(@class,'WPbbXM3l')]",
-  "comment_xpath": "//*[@role='tab' and @data-tabkey='semiTabcomment']",
-  "private_chat_xpath": "//button[normalize-space(.)='私信']"
+  "private_chat_xpath": "//*[@id='user_detail_element']//button[.//span[normalize-space(.)='私信']]",
+  "send_message_xpath": "//*[contains(concat(' ', normalize-space(@class), ' '), ' e2e-send-msg-btn ')]"
 }
