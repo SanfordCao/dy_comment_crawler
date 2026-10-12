@@ -104,6 +104,22 @@ async def wait_for_private_chat_button(buttons: Any, log: Callable[[str], None],
         await asyncio.sleep(min(0.2, remaining))
 
 
+async def can_reopen_private_chat(page: Any, sec_uid: str) -> bool:
+    """仅在目标主页的 IM 容器已显示且没有会话节点时允许补点入口。"""
+    if page.is_closed():
+        return False
+    parsed = urlparse(page.url)
+    if parsed.hostname != "www.douyin.com" or parsed.path.rstrip("/") != f"/user/{sec_uid}":
+        return False
+    # 隐藏的编辑器也可能保存草稿或其他会话，存在任何会话节点时都不擅自再点。
+    if await page.locator(CHAT_EDITOR).count() or await page.locator(CHAT_HEADER).count():
+        return False
+    for container in await page.locator(".imContainer").all():
+        if await container.is_visible():
+            return True
+    return False
+
+
 async def open_user_chat(context: Any, author: dict[str, Any],
                          on_ready: Callable[[Any, str], None] | None = None,
                          private_chat_xpath: str = "") -> dict[str, Any]:
@@ -301,7 +317,26 @@ async def open_user_chat(context: Any, author: dict[str, Any],
         # 输入框和会话标题只用于确认界面打开；昵称会变化，不适合作为账号身份依据。
         editor = target.locator(CHAT_EDITOR)
         enter_stage("等待聊天输入框", f"等待 {CHAT_EDITOR} 可见（10 秒）；当前匹配 {await editor.count()} 个")
-        await editor.wait_for(state="visible", timeout=10000)
+        try:
+            await editor.wait_for(state="visible", timeout=10000)
+        except PlaywrightTimeout:
+            await log_component_state(target, "首次会话等待超时")
+            # 只修复原主页已初始化但未打开会话的情况；新窗口或现有会话不能盲目补点。
+            if popups or target is not page or not await can_reopen_private_chat(page, sec_uid):
+                log_step("不满足入口补点条件，停止；不会重复点击或发送")
+                raise
+            await check_chat_blockers(page)
+            enter_stage("补点私信入口", "IM 容器已可见但会话尚未建立；按配置补点一次，不重载主页或发送消息")
+            button = await wait_for_private_chat_button(buttons, log_step)
+            # 等待按钮期间状态可能变化，点击前再次检查，避免覆盖刚出现的会话。
+            if popups or not await can_reopen_private_chat(page, sec_uid):
+                log_step("页面状态已变化，取消补点，仅继续等待原会话")
+            else:
+                await check_chat_blockers(page)
+                await button.click(timeout=10000)
+                log_step("已补点一次私信入口；本次操作不再补点")
+            enter_stage("等待补点后聊天输入框", "继续等待原主页聊天输入框（10 秒）；失败即停止，不再补点")
+            await editor.wait_for(state="visible", timeout=10000)
         log_step("聊天输入框已可见")
         header = target.locator(CHAT_HEADER)
         enter_stage("等待会话标题", f"等待 {CHAT_HEADER} 可见（10 秒）；当前匹配 {await header.count()} 个")
