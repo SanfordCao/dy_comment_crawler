@@ -356,6 +356,14 @@
         #chatIdentity{white-space:pre-wrap;overflow-wrap:anywhere}
         .chat-status{font-size:13px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
         .chat-status.error{color:#a5322d}
+        /* 私信操作可能需要在另一个浏览器窗口处理验证，因此加载提示始终留在当前弹窗内。 */
+        .chat-loading{display:flex;align-items:center;gap:12px;margin:14px 0;padding:13px 15px;border:1px solid #b7dad4;border-radius:12px;background:#edf8f5;color:#146d63}
+        .chat-loading[hidden]{display:none}
+        .chat-loading strong{display:block;font-size:15px}
+        .chat-loading span:last-child{display:block;margin-top:3px;font-size:13px;line-height:1.5}
+        .chat-loading-spinner{width:22px;height:22px;flex:none;border:3px solid #b7dad4;border-top-color:#147f72;border-radius:50%;animation:chat-loading-spin .8s linear infinite}
+        @keyframes chat-loading-spin{to{transform:rotate(360deg)}}
+        @media (prefers-reduced-motion:reduce){.chat-loading-spinner{animation:none;border-top-color:#147f72}}
         #chatDraft{width:100%;min-height:120px;resize:vertical;border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff}
         .bulk-chat-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0;color:var(--muted);font-size:14px}
         .bulk-chat-actions label,.comment-author-selection{display:flex;align-items:center;gap:8px}
@@ -1824,6 +1832,7 @@
         <p id="chatIdentity"></p>
         <div class="field"><label for="chatDraft">私信内容</label><textarea id="chatDraft" rows="4" maxlength="1000" placeholder="填写内容后直接点击发送私信"></textarea></div>
         <p id="chatHelp" class="chat-status">仅使用你自己的登录账号。点击“发送私信”会自动打开并核对目标会话，再提交一条消息；不自动重试。也可只打开抖音私信，人工查看。是否可私信取决于对方设置。</p>
+        <div id="chatLoading" class="chat-loading" role="status" aria-live="polite" hidden><span class="chat-loading-spinner" aria-hidden="true"></span><div><strong id="chatLoadingTitle"></strong><span id="chatLoadingHint">请查看另一个浏览器窗口。</span></div></div>
         <p id="chatStatus" class="chat-status" role="status" aria-live="polite"></p>
         <div class="dialog-actions"><button id="closeChat" type="button" class="btn">关闭</button><button id="openChatPage" type="button" class="btn">打开抖音私信</button><button id="sendChatMessage" type="button" class="btn primary" disabled>发送私信</button></div>
     </section>
@@ -1835,6 +1844,7 @@
         <div id="bulkChatRecipients"></div>
         <div id="bulkChatCompose"><label for="bulkChatDraft">统一私信内容</label><textarea id="bulkChatDraft" maxlength="1000" rows="4" placeholder="输入发送给以上所有用户的相同内容"></textarea>
         </div>
+        <div id="bulkChatLoading" class="chat-loading" role="status" aria-live="polite" hidden><span class="chat-loading-spinner" aria-hidden="true"></span><div><strong id="bulkChatLoadingTitle">正在处理批量私信</strong><span>请查看另一个浏览器窗口，按需完成登录或验证。</span></div></div>
         <p id="bulkChatStatus" class="chat-status" role="status" aria-live="polite"></p>
         <div class="dialog-actions"><button id="closeBulkChat" class="btn" type="button">关闭</button><button id="stopBulkChat" class="btn danger" type="button" hidden>停止后续发送</button><button id="startBulkChat" class="btn primary" type="button" disabled>批量发送</button></div>
     </section>
@@ -3034,6 +3044,9 @@
         $('bulkChatDraft').disabled=bulkChatSubmitting;
         $('stopBulkChat').hidden=!bulkChatRunning();$('stopBulkChat').disabled=bulkChatState.status==='stopping';
         $('closeBulkChat').disabled=bulkChatSubmitting;
+        // 后台逐个处理时保持提示可见，但不遮挡“停止后续发送”。
+        $('bulkChatLoading').hidden=!(bulkChatSubmitting || bulkChatRunning());
+        $('bulkChatLoadingTitle').textContent=bulkChatSubmitting?'正在启动批量私信':'正在处理批量私信';
     }
     /** 打开预览不发送；已有运行任务时展示该任务，不能用新的选择替换当前发送对象。 */
     function openBulkChatDialog(){
@@ -3096,6 +3109,15 @@
 
     let chatTarget = null, chatBusy = false, chatToken = null, chatSendAttempted = false;
     const chatDrafts = new Map();
+    /** 操作期间展示独立的加载框，提示用户查看抖音窗口；完成或失败后立即收起。 */
+    function setChatLoading(phase){
+        $('chatLoading').hidden=!phase;
+        if(!phase)return;
+        $('chatLoadingTitle').textContent=phase==='send'?'正在发送私信':'正在打开抖音私信';
+        $('chatLoadingHint').textContent=phase==='send'
+            ?'请查看另一个浏览器窗口，核对聊天窗口和发送结果。'
+            :'请查看另一个浏览器窗口，按需完成登录或验证。';
+    }
     /** 有有效目标和文本即可直接发送；实际发送前自动打开并核验会话。 */
     function syncChatControls(){
         $('openChatPage').disabled=chatBusy || bulkChatRunning() || !chatTarget?.sec_uid;
@@ -3107,6 +3129,7 @@
     function openChatDialog(comment) {
         if(chatBusy) return;
         chatToken=null;chatSendAttempted=false;
+        setChatLoading(null);
         const author=comment.author || {};
         chatTarget={run_name:selectedRun,comment_id:String(comment.id || ''),sec_uid:String(author.sec_uid || ''),nickname:author.nickname || '匿名用户'};
         $('chatTitle').textContent=`私聊：${chatTarget.nickname}`;
@@ -3123,12 +3146,14 @@
         // 同时删除暂存内容，避免再次打开同一用户时回显旧消息。
         if(chatTarget?.sec_uid) chatDrafts.delete(chatTarget.sec_uid);
         $('chatDraft').value='';
+        setChatLoading(null);
         $('chatDialog').classList.remove('show');$('chatDialog').setAttribute('aria-hidden','true');chatTarget=null;chatToken=null;
     }
     /** 打开入口仅提交任务和评论 ID，不上传消息，不触发发送。 */
     async function openChatPage(){
         if(chatBusy || !chatTarget?.sec_uid) return;
         const target={...chatTarget};chatBusy=true;chatToken=null;syncChatControls();
+        setChatLoading('open');
         $('chatStatus').className='chat-status';$('chatStatus').textContent='正在独立标签页核对用户并打开私信入口…';
         try{
             const result=await api('/api/private-chat/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_name:target.run_name,comment_id:target.comment_id})});
@@ -3136,13 +3161,14 @@
             chatSendAttempted=false;
             $('chatStatus').textContent=result.message;
         }catch(error){$('chatStatus').textContent=error.message;$('chatStatus').className='chat-status error';}
-        finally{chatBusy=false;syncChatControls();}
+        finally{chatBusy=false;setChatLoading(null);syncChatControls();}
     }
     /** 用户点击才发送一条文本；凭据立即消费，网络异常不重发，失败仍保留草稿。 */
     async function sendChatMessage(){
         if(chatBusy || chatSendAttempted || !chatTarget?.sec_uid || !$('chatDraft').value.trim()) return;
         const target={...chatTarget}, existingToken=chatToken, message=$('chatDraft').value;
         chatToken=null;chatBusy=true;syncChatControls();
+        setChatLoading(existingToken?'send':'open');
         $('sendChatMessage').textContent='发送中…';
         $('chatStatus').className='chat-status';$('chatStatus').textContent='正在核对聊天对象并提交私信，请勿重复发送…';
         try{
@@ -3155,6 +3181,7 @@
             }
             // 一旦开始提交，即使网络断开也不能安全补发；需先人工核对并重新打开。
             chatSendAttempted=true;
+            setChatLoading('send');
             $('chatStatus').textContent='正在提交私信，请勿重复发送…';
             const result=await api('/api/private-chat/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_token:token,message})});
             $('chatStatus').textContent=result.message;
@@ -3165,7 +3192,7 @@
             }
             showNotice('已提交发送操作，请到抖音核对结果');
         }catch(error){$('chatStatus').textContent=`${error.message} 不会自动重发；请先核对抖音实际结果。`;$('chatStatus').className='chat-status error';}
-        finally{chatBusy=false;$('sendChatMessage').textContent='发送私信';syncChatControls();}
+        finally{chatBusy=false;setChatLoading(null);$('sendChatMessage').textContent='发送私信';syncChatControls();}
     }
     $('chatDraft').addEventListener('input',()=>{if(chatTarget?.sec_uid) chatDrafts.set(chatTarget.sec_uid,$('chatDraft').value);syncChatControls();});
     $('closeChat').onclick=closeChatDialog;$('openChatPage').onclick=openChatPage;$('sendChatMessage').onclick=sendChatMessage;
