@@ -120,6 +120,23 @@ async def can_reopen_private_chat(page: Any, sec_uid: str) -> bool:
     return False
 
 
+def sanitized_click_error_lines(error: Exception) -> list[str]:
+    """保留点击等待步骤，隐藏 URL 和元素正文，避免 Call log 泄露聊天内容。"""
+    lines = []
+    for line in str(error).splitlines():
+        line = re.sub(r"https?://[^\s\"'<>]+", "[URL省略]", line)
+        if "<" in line:
+            # Playwright 可能在拦截元素摘要中输出文字，改为仅记录标签和 class。
+            tags = []
+            for match in re.finditer(r"<([A-Za-z][\w:-]*)\b([^>]*)>", line):
+                class_match = re.search(r'\bclass="([^"]*)"', match.group(2))
+                tags.append(f"<{match.group(1)} class={class_match.group(1) if class_match else '无'}>")
+            suffix = " intercepts pointer events" if "intercepts pointer events" in line else ""
+            line = line.split("<", 1)[0] + " ".join(tags) + suffix + "（元素正文已省略）"
+        lines.append(line)
+    return lines
+
+
 async def open_user_chat(context: Any, author: dict[str, Any],
                          on_ready: Callable[[Any, str], None] | None = None,
                          private_chat_xpath: str = "") -> dict[str, Any]:
@@ -261,6 +278,43 @@ async def open_user_chat(context: Any, author: dict[str, Any],
         except (PlaywrightError, TimeoutError) as error:
             log_step(f"组件状态读取失败 {label}：{type(error).__name__}；不改变原操作结果")
 
+    async def log_click_target(button: Any, label: str) -> None:
+        """记录按钮位置、命中元素与遮挡层的属性，不读取按钮或聊天文字。"""
+        try:
+            state = await asyncio.wait_for(button.evaluate("""element => {
+                const describe = node => {
+                    if (!node) return null;
+                    const style = getComputedStyle(node);
+                    return {tag: node.tagName, class: node.getAttribute('class'),
+                        pointerEvents: style.pointerEvents, zIndex: style.zIndex};
+                };
+                const rect = element.getBoundingClientRect();
+                const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+                const inViewport = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight;
+                const hit = inViewport ? document.elementFromPoint(x, y) : null;
+                return {button: describe(element),
+                    rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
+                    centerInViewport: inViewport,
+                    centerHitsButton: !!hit && (hit === element || element.contains(hit)),
+                    hit: describe(hit),
+                    layers: inViewport ? document.elementsFromPoint(x, y).slice(0, 5).map(describe) : []};
+            }"""), timeout=1)
+            log_step(f"点击命中检查 {label}：{state}")
+        except (PlaywrightError, TimeoutError) as error:
+            log_step(f"点击命中检查失败 {label}：{type(error).__name__}；不改变原操作结果")
+
+    async def click_private_entry(button: Any) -> None:
+        """执行一次正常点击，失败时保留经过隐私过滤的等待详情及遮挡现场。"""
+        await log_click_target(button, "点击前")
+        try:
+            await button.click(timeout=10000)
+        except PlaywrightError as error:
+            log_step("点击失败详情开始（URL 与元素正文已过滤）")
+            for line in sanitized_click_error_lines(error):
+                log_step(f"点击等待详情：{line}")
+            await log_click_target(button, "点击失败后")
+            raise
+
     def on_popup(popup: Any) -> None:
         """记录新打开的私信标签页，供后续核对聊天界面使用。"""
         popups.append(popup)
@@ -304,7 +358,7 @@ async def open_user_chat(context: Any, author: dict[str, Any],
         button = await wait_for_private_chat_button(buttons, log_step)
         await log_component_state(page, "点击前")
         enter_stage("点击私信按钮", "入口可用，执行一次点击（10 秒），不自动重试")
-        await button.click(timeout=10000)
+        await click_private_entry(button)
         log_step("私信按钮点击完成")
         enter_stage("选择聊天标签页", "按现有流程等待 1 秒，再选择新窗口或原主页")
         await page.wait_for_timeout(1000)
@@ -333,7 +387,7 @@ async def open_user_chat(context: Any, author: dict[str, Any],
                 log_step("页面状态已变化，取消补点，仅继续等待原会话")
             else:
                 await check_chat_blockers(page)
-                await button.click(timeout=10000)
+                await click_private_entry(button)
                 log_step("已补点一次私信入口；本次操作不再补点")
             enter_stage("等待补点后聊天输入框", "继续等待原主页聊天输入框（10 秒）；失败即停止，不再补点")
             await editor.wait_for(state="visible", timeout=10000)
