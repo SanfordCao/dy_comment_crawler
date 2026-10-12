@@ -112,7 +112,7 @@ class PrivateChatBatch:
                                        send_message_xpath=self.send_message_xpath())
 
     def _run(self, authors: list[dict[str, Any]], message: str) -> None:
-        """逐位发送相同内容，失败不重试；验证或不确定结果中止剩余任务。"""
+        """逐位发送相同内容；单人失败或结果不确定时记录原因并继续下一位。"""
         terminal = "completed"
         try:
             for index, author in enumerate(authors):
@@ -130,19 +130,15 @@ class PrivateChatBatch:
                     if result["status"] == "cancelled":
                         terminal = "stopped"
                         break
-                    if result.get("page_closed") is False:
-                        # 包括未确认提交的情况，宁可中止，不能静默继续大批发送。
-                        terminal = "blocked"
-                        break
+                    # 已点击发送但结果未确认时保留页面供人工核对，不对该用户补发。
+                    # 下一位会新开主页并重新核对 sec_uid，因此可以继续处理。
                 except Exception as error:
                     detail = str(error)
-                    # 已知账号限制只跳过本用户；未知故障、验证及超时一律中止，不自动续跑。
+                    # 单人失败不影响队列；已知权限限制归类为跳过，其余保留异常供核对。
+                    # 无论发送按钮是否曾被点击，都不对同一用户自动重试。
                     skip = any(text in detail for text in ("该账号为私密账号", "该用户当前无法私信", "该用户的私信入口不可用"))
                     with self.lock:
                         self.job["items"][index].update(status="skipped" if skip else "failed", detail=detail)
-                    if not skip:
-                        terminal = "blocked"
-                        break
                 # 不额外等待固定间隔；下一轮仍先检查停止信号，再串行处理下一位。
         finally:
             with self.lock:
@@ -150,7 +146,9 @@ class PrivateChatBatch:
                     if item["status"] in {"pending", "running"}:
                         item.update(status="cancelled", detail="未继续发送")
                 self.job["status"] = terminal
-                self.job["message"] = {"completed": "批量操作已结束，请以抖音实际发送记录为准",
-                                       "stopped": "已停止，剩余用户未发送",
-                                       "blocked": "遇到异常或不确定结果，后续发送已停止，请人工核对"}[terminal]
+                needs_review = any(item["status"] in {"failed", "skipped"}
+                                   or item.get("page_closed") is False for item in self.job["items"])
+                self.job["message"] = ("已停止，剩余用户未发送" if terminal == "stopped" else
+                                       "批量操作已结束；失败用户已跳过，结果不确定的用户请人工核对，不会自动重发"
+                                       if needs_review else "批量操作已结束，请以抖音实际发送记录为准")
             self.chat_lock.release()
