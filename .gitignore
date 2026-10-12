@@ -1,4 +1,6 @@
 output/
+admin_keys/
+tools/admin_keys/
 .venv/
 .douyin-browser-profile/
 __pycache__/
@@ -6,3 +8,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 .DS_Store
+*private_key*.pem
+*.lic
+build/
+dist/

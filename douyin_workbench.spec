@@ -36,6 +36,11 @@ for name in ('web_console_settings.json', 'capture_settings.json', 'capture_pres
 a = Analysis([str(root / 'src' / 'web_console.py')], pathex=[str(root / 'src')],
              binaries=[], datas=datas, hiddenimports=['pystray._win32'], hookspath=[], hooksconfig={}, runtime_hooks=[],
              excludes=['license_issuer'], noarchive=False)
+# 检查最终收集清单，包括依赖钩子或资源符号链接，防止管理员私钥目录意外进入发行包。
+admin_key_directories = [(root / 'tools' / 'admin_keys').resolve(), (root / 'admin_keys').resolve()]
+for _, source, _ in [*a.datas, *a.binaries]:
+    if any(Path(source).resolve().is_relative_to(directory) for directory in admin_key_directories):
+        raise SystemExit('禁止打包管理员私钥目录，请检查资源收集配置。')
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name='抖音评论工作台',
           debug=False, bootloader_ignore_signals=False, strip=False, upx=False, console=False,
