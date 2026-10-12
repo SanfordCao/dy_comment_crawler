@@ -1779,6 +1779,7 @@
             </div>
             <div class="field"><label for="privateChatXpath">私信按钮 XPath</label><textarea id="privateChatXpath" rows="3"></textarea><small>用于用户主页的私信入口，单条和批量私信共用；必须填写并保存，不自动匹配。仍需先核对主页身份。</small></div>
             <div class="field"><label for="sendMessageXpath">私信发送按钮 XPath</label><textarea id="sendMessageXpath" rows="3"></textarea><small>用于聊天界面的发送按钮，单条和批量私信共用；必须填写并保存，不自动匹配。未配置时不填写或发送消息。</small></div>
+            <div class="field"><label for="closeChatPanelXpath">消息面板关闭按钮 XPath</label><textarea id="closeChatPanelXpath" rows="3"></textarea><small>首次打开后未进入会话时，按此配置关闭消息面板，再补点一次私信入口。单条和批量共用；留空则停止恢复，不自动匹配、不强制点击。</small></div>
             <div class="actions">
                 <button id="saveXpath" class="btn primary">保存配置</button>
                 <button id="clearXpath" class="btn">清空</button>
@@ -2227,7 +2228,8 @@
             $("titleApiPath").value = settings.title_api_path || "";
             $("titleJsonPath").value = settings.title_json_path || "";
             $("privateChatXpath").value = settings.private_chat_xpath || "";
-            $("sendMessageXpath").value = settings.send_message_xpath || ""
+            $("sendMessageXpath").value = settings.send_message_xpath || "";
+            $("closeChatPanelXpath").value = settings.close_chat_panel_xpath || ""
         } catch (error) {
             showXpathNotice(error.message, true)
         }
@@ -2250,7 +2252,8 @@
                     title_api_path: $("titleApiPath").value,
                     title_json_path: $("titleJsonPath").value,
                     private_chat_xpath: $("privateChatXpath").value,
-                    send_message_xpath: $("sendMessageXpath").value
+                    send_message_xpath: $("sendMessageXpath").value,
+                    close_chat_panel_xpath: $("closeChatPanelXpath").value
                 })
             });
             showXpathNotice("全局配置已保存，新采集任务和私信操作将使用此配置")
@@ -2266,7 +2269,8 @@
     $("clearXpath").onclick = () => {
         $("pauseXpath").value = "";
         $("privateChatXpath").value = "";
-        $("sendMessageXpath").value = ""
+        $("sendMessageXpath").value = "";
+        $("closeChatPanelXpath").value = ""
     };
     $("advancedToggle").onclick = () => {
         const panel = $("advancedSettings"), expanded = panel.hidden;

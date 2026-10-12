@@ -148,6 +148,7 @@ class ConsoleState:
             self.browser_session, self.chat_lock,
             private_chat_xpath=lambda: self.get_xpath_settings().get("private_chat_xpath", ""),
             send_message_xpath=lambda: self.get_xpath_settings().get("send_message_xpath", ""),
+            close_chat_panel_xpath=lambda: self.get_xpath_settings().get("close_chat_panel_xpath", ""),
         )
         self.settings_path = console_config_dir(self.project_root) / "web_console_settings.json"
         legacy_settings_path = self.project_root / "web_console_settings.json"
@@ -156,6 +157,7 @@ class ConsoleState:
             **METADATA_DEFAULTS,
             "private_chat_xpath": "",
             "send_message_xpath": "",
+            "close_chat_panel_xpath": "",
         }
         settings_source = (
             self.settings_path
@@ -434,7 +436,7 @@ class ConsoleState:
     def save_xpath_settings(self, payload: dict[str, Any]) -> dict[str, str]:
         """验证并持久化全局按钮及接口配置，旧昵称/标题 XPath 不再保存。"""
         settings: dict[str, str] = validate_metadata_settings(payload)
-        for key in ("pause_xpath", "private_chat_xpath", "send_message_xpath"):
+        for key in ("pause_xpath", "private_chat_xpath", "send_message_xpath", "close_chat_panel_xpath"):
             value = payload.get(key, "")
             if not isinstance(value, str) or len(value) > 4_096:
                 raise ValueError(f"{key} 必须是 4096 字符以内的 XPath 文本")
@@ -928,6 +930,7 @@ class ConsoleState:
             result = await asyncio.wait_for(open_user_chat(
                 context, author, remember_chat,
                 private_chat_xpath=self.get_xpath_settings().get("private_chat_xpath", ""),
+                close_chat_panel_xpath=self.get_xpath_settings().get("close_chat_panel_xpath", ""),
             ), timeout=60)
             if self.private_chat_session:
                 result["chat_token"] = self.private_chat_session["token"]

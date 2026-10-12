@@ -77,7 +77,8 @@ async def check_chat_blockers(page: Any) -> None:
 
 
 async def wait_for_private_chat_button(buttons: Any, log: Callable[[str], None],
-                                       timeout_seconds: float = 10) -> Any:
+                                       timeout_seconds: float = 10,
+                                       label: str = "私信入口") -> Any:
     """等待配置匹配中的唯一可见且可用按钮，忽略隐藏副本但拒绝多个可见入口。"""
     deadline = monotonic() + timeout_seconds
     previous_state = None
@@ -92,13 +93,13 @@ async def wait_for_private_chat_button(buttons: Any, log: Callable[[str], None],
             previous_state = state
         # 多个可见入口存在身份歧义，不因其中某个可用就擅自选取。
         if len(visible) > 1:
-            raise RuntimeError("私信入口不唯一，已停止操作，请在主页手动选择")
+            raise RuntimeError(f"{label}不唯一，已停止操作，请在主页手动选择")
         if enabled:
             return visible[0]
         remaining = deadline - monotonic()
         if remaining <= 0:
             raise PlaywrightTimeout(
-                f"等待唯一可见且可用的私信按钮超时（{timeout_seconds:g} 秒）；"
+                f"等待唯一可见且可用的{label}超时（{timeout_seconds:g} 秒）；"
                 f"配置匹配 {len(matches)} 个，可见 {len(visible)} 个")
         # 页面加载可能重建按钮，每轮重新获取匹配；等待本身不点击或触发重试。
         await asyncio.sleep(min(0.2, remaining))
@@ -120,6 +121,40 @@ async def can_reopen_private_chat(page: Any, sec_uid: str) -> bool:
     return False
 
 
+async def close_uninitialized_chat_panel(page: Any, sec_uid: str, close_xpath: str,
+                                         log: Callable[[str], None]) -> bool:
+    """仅关闭已初始化但未进入会话的面板，按显式配置点击一次并确认面板隐藏。"""
+    configured = close_xpath.strip() if isinstance(close_xpath, str) else ""
+    log(f"[按钮配置] 消息面板关闭按钮 close_chat_panel_xpath = {configured or '（未配置）'}")
+    if not configured:
+        raise RuntimeError("请在高级配置的 XPath配置中填写并保存消息面板关闭按钮 XPath；未补点或发送消息")
+    if not await can_reopen_private_chat(page, sec_uid):
+        log("会话或主页状态已变化，不关闭消息面板")
+        return False
+    button = await wait_for_private_chat_button(page.locator(f"xpath={configured}"), log,
+                                               timeout_seconds=5, label="消息面板关闭入口")
+    # 等待关闭按钮期间可能已经出现会话，必须再核对，避免关闭用户正在使用的聊天。
+    if not await can_reopen_private_chat(page, sec_uid):
+        log("关闭前会话状态已变化，取消关闭")
+        return False
+    await check_chat_blockers(page)
+    await button.click(timeout=5000)
+    log("已点击一次配置的消息面板关闭按钮，等待面板隐藏")
+    deadline = monotonic() + 5
+    while True:
+        if page.is_closed():
+            raise RuntimeError("关闭消息面板时标签页已关闭，停止补点；未发送消息")
+        containers = await page.locator(".imContainer").all()
+        visible = [container for container in containers if await container.is_visible()]
+        if not visible:
+            log("消息面板已隐藏，可以重新检查主页私信入口")
+            return True
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise RuntimeError("消息面板未隐藏，停止补点；请检查关闭按钮 XPath，未发送消息")
+        await asyncio.sleep(min(0.2, remaining))
+
+
 def sanitized_click_error_lines(error: Exception) -> list[str]:
     """保留点击等待步骤，隐藏 URL 和元素正文，避免 Call log 泄露聊天内容。"""
     lines = []
@@ -139,7 +174,8 @@ def sanitized_click_error_lines(error: Exception) -> list[str]:
 
 async def open_user_chat(context: Any, author: dict[str, Any],
                          on_ready: Callable[[Any, str], None] | None = None,
-                         private_chat_xpath: str = "") -> dict[str, Any]:
+                         private_chat_xpath: str = "",
+                         close_chat_panel_xpath: str = "") -> dict[str, Any]:
     """以 sec_uid 核对主页身份并确认私信界面出现，不以昵称作为身份依据。"""
     sec_uid = validated_sec_uid(author.get("sec_uid"))
     started = monotonic()
@@ -380,12 +416,18 @@ async def open_user_chat(context: Any, author: dict[str, Any],
                 log_step("不满足入口补点条件，停止；不会重复点击或发送")
                 raise
             await check_chat_blockers(page)
-            enter_stage("补点私信入口", "IM 容器已可见但会话尚未建立；按配置补点一次，不重载主页或发送消息")
-            button = await wait_for_private_chat_button(buttons, log_step)
-            # 等待按钮期间状态可能变化，点击前再次检查，避免覆盖刚出现的会话。
-            if popups or not await can_reopen_private_chat(page, sec_uid):
-                log_step("页面状态已变化，取消补点，仅继续等待原会话")
-            else:
+            enter_stage("关闭未建会话的消息面板", "按配置关闭消息面板一次，解除主页按钮遮挡；不关闭标签页")
+            closed = await close_uninitialized_chat_panel(page, sec_uid, close_chat_panel_xpath, log_step)
+            if closed:
+                enter_stage("补点私信入口", "面板已隐藏，重新定位主页入口并正常点击一次，不强制点击")
+                button = await wait_for_private_chat_button(buttons, log_step)
+                parsed = urlparse(page.url)
+                if (page.is_closed() or popups or parsed.hostname != "www.douyin.com"
+                        or parsed.path.rstrip("/") != f"/user/{sec_uid}"):
+                    raise RuntimeError("补点前主页或窗口状态已变化，停止操作；未发送消息")
+                # 隐藏面板后不再用“容器可见”作条件，但仍拒绝覆盖任何已出现的会话。
+                if await editor.count() or await page.locator(CHAT_HEADER).count():
+                    raise RuntimeError("补点前已出现会话节点，停止补点；请人工核对，未发送消息")
                 await check_chat_blockers(page)
                 await click_private_entry(button)
                 log_step("已补点一次私信入口；本次操作不再补点")

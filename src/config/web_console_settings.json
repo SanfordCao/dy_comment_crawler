@@ -5,5 +5,6 @@
   "title_json_path": "aweme_detail.item_title",
   "pause_xpath": "(//xg-icon[contains(concat(' ', normalize-space(@class), ' '), ' xgplayer-play ')])[1]",
   "private_chat_xpath": "//*[@id='user_detail_element']//button[.//span[normalize-space(.)='私信']]",
-  "send_message_xpath": "//*[contains(concat(' ', normalize-space(@class), ' '), ' e2e-send-msg-btn ')]"
+  "send_message_xpath": "//*[contains(concat(' ', normalize-space(@class), ' '), ' e2e-send-msg-btn ')]",
+  "close_chat_panel_xpath": "//*[@id='imSaasContainerId']//*[contains(concat(' ', normalize-space(@class), ' '), ' StackLayoutStackTitleBarcloseImPage ')]"
 }

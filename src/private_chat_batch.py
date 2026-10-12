@@ -19,13 +19,15 @@ class PrivateChatBatch:
 
     def __init__(self, browser_session: Any, chat_lock: Any,
                  private_chat_xpath: Callable[[], str] | None = None,
-                 send_message_xpath: Callable[[], str] | None = None) -> None:
+                 send_message_xpath: Callable[[], str] | None = None,
+                 close_chat_panel_xpath: Callable[[], str] | None = None) -> None:
         """初始化状态、停止信号和请求去重；不启动浏览器或发送消息。"""
         self.browser_session = browser_session
         self.chat_lock = chat_lock
         # 使用全局配置读取函数，避免批量私信另存一份 XPath 导致配置不一致。
         self.private_chat_xpath = private_chat_xpath or (lambda: "")
         self.send_message_xpath = send_message_xpath or (lambda: "")
+        self.close_chat_panel_xpath = close_chat_panel_xpath or (lambda: "")
         self.lock = Lock()
         self.stop_event = Event()
         self.worker: Thread | None = None
@@ -100,7 +102,8 @@ class PrivateChatBatch:
             ready.update(page=page, sec_uid=sec_uid)
 
         await open_user_chat(context, author, remember,
-                             private_chat_xpath=self.private_chat_xpath())
+                             private_chat_xpath=self.private_chat_xpath(),
+                             close_chat_panel_xpath=self.close_chat_panel_xpath())
         if self.stop_event.is_set():
             return {"status": "cancelled", "message": "已停止，未发送"}
         if not ready:
