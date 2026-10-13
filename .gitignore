@@ -3,6 +3,8 @@ admin_keys/
 tools/admin_keys/
 .venv/
 .douyin-browser-profile/
+src/config/disclaimer_ack.json
+config/disclaimer_ack.json
 __pycache__/
 *.py[cod]
 .pytest_cache/
