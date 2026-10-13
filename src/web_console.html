@@ -507,6 +507,16 @@
             display: flex
         }
 
+        /* 启动确认始终盖在工作台上；小屏可滚动阅读，不允许点背景跳过。 */
+        #disclaimerDialog{z-index:100}
+        #disclaimerDialog .dialog{width:min(100%,620px);max-height:calc(100vh - 40px);overflow-y:auto}
+        .disclaimer-copy{display:grid;gap:10px;margin-top:14px;color:var(--muted);line-height:1.6}
+        .disclaimer-copy p{margin:0}
+        .disclaimer-consent{display:grid;grid-template-columns:18px minmax(0,1fr);align-items:start;gap:9px;margin-top:18px;line-height:1.5;cursor:pointer}
+        /* 覆盖全站表单 input 的 100% 宽度和内边距，避免勾选框撑破弹窗。 */
+        .disclaimer-consent input{width:18px;height:18px;padding:0;margin:3px 0 0;accent-color:var(--teal)}
+        .disclaimer-consent span{min-width:0;overflow-wrap:anywhere}
+
         .dialog {
             width: min(100%, 440px);
             padding: 26px;
@@ -1622,7 +1632,20 @@
 </style>
 </head>
 <body>
-<main class="shell">
+<div id="disclaimerDialog" class="dialog-backdrop show" role="presentation" aria-hidden="false">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="disclaimerTitle" aria-describedby="disclaimerCopy">
+        <h2 id="disclaimerTitle">使用须知与免责声明</h2>
+        <div id="disclaimerCopy" class="disclaimer-copy">
+            <p>本工具仅用于你有权访问的公开评论调研。使用前请遵守适用法律、平台规则，并尊重用户隐私与他人权益；不要绕过访问限制或将采集结果用于骚扰、垃圾私信等用途。</p>
+            <p>评论、图片及用户资料可能不完整、延迟或变化；平台可能限制访问。请自行核对数据与私信结果，并审慎决定采集、保存、使用和分享的范围。</p>
+            <p>继续使用表示你了解上述风险并自行负责具体使用行为。若不同意，请关闭页面并退出程序。首次确认后会保存在本机，以后启动无需重复确认。</p>
+        </div>
+        <label class="disclaimer-consent" for="disclaimerCheckbox"><input id="disclaimerCheckbox" type="checkbox"><span>我已阅读并理解上述使用须知</span></label>
+        <p id="disclaimerError" class="dialog-error" role="alert" hidden></p>
+        <div class="dialog-actions"><button id="confirmDisclaimer" class="btn primary" type="button" disabled>确认并进入工作台</button></div>
+    </section>
+</div>
+<main id="workbench" class="shell" inert>
     <header class="top">
         <div>
             <div class="eyebrow">LOCAL RESEARCH DESK</div>
@@ -3326,7 +3349,44 @@
         loadRuns()
     }
 
-    initializePage();
+    /** 页面打开时读取本机确认状态；首次确认后，刷新及重启均不重复提示。 */
+    async function initializeWithDisclaimer(){
+        try{
+            const status=await api('/api/disclaimer/status');
+            if(status.accepted){
+                $('disclaimerDialog').classList.remove('show');
+                $('disclaimerDialog').setAttribute('aria-hidden','true');
+                $('workbench').removeAttribute('inert');
+                await initializePage();
+                return;
+            }
+        }catch(error){
+            $('disclaimerError').textContent=error.message;
+            $('disclaimerError').hidden=false;
+        }
+        $('disclaimerCheckbox').focus();
+    }
+    /** 只有勾选并经服务端持久化确认，才解锁工作台及业务接口。 */
+    async function confirmDisclaimer(){
+        if(!$('disclaimerCheckbox').checked)return;
+        const button=$('confirmDisclaimer');
+        button.disabled=true;
+        $('disclaimerError').hidden=true;
+        try{
+            await api('/api/disclaimer/accept',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accepted:true})});
+            $('disclaimerDialog').classList.remove('show');
+            $('disclaimerDialog').setAttribute('aria-hidden','true');
+            $('workbench').removeAttribute('inert');
+            await initializePage();
+        }catch(error){
+            $('disclaimerError').textContent=error.message;
+            $('disclaimerError').hidden=false;
+            button.disabled=!$('disclaimerCheckbox').checked;
+        }
+    }
+    $('disclaimerCheckbox').onchange=()=>{$('confirmDisclaimer').disabled=!$('disclaimerCheckbox').checked};
+    $('confirmDisclaimer').onclick=confirmDisclaimer;
+    initializeWithDisclaimer();
 </script>
 </body>
 </html>

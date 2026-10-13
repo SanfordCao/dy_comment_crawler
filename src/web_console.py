@@ -61,6 +61,25 @@ def console_config_dir(project_root: Path) -> Path:
     return project_root / "config" if getattr(sys, "frozen", False) else project_root / "src" / "config"
 
 
+def load_disclaimer_acceptance(path: Path) -> bool:
+    """只认本机明确保存的确认记录；文件不存在或损坏时重新显示弹窗。"""
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("accepted") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def save_disclaimer_acceptance(path: Path) -> None:
+    """原子保存首次确认，避免中途退出留下看似已确认的残缺文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    try:
+        temporary.write_text('{"accepted": true}\n', encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def initialize_packaged_config(project_root: Path) -> None:
     """将包内默认配置补齐到 EXE 同级目录，已有配置始终保留。"""
     if not getattr(sys, "frozen", False):
@@ -1040,10 +1059,15 @@ class ConsoleState:
 
 class ConsoleServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], state: ConsoleState, manager: LicenseManager) -> None:
-        """服务统一持有授权管理器，运行中到期或取时失败立即禁止新操作。"""
+        """服务统一持有授权管理器和本机持久化的免责声明确认状态。"""
         super().__init__(address, ConsoleRequestHandler)
         self.state = state
         self.license_manager = manager
+        self.disclaimer_path = console_config_dir(state.project_root) / "disclaimer_ack.json"
+        self.disclaimer_lock = Lock()
+        self.disclaimer_accepted = Event()
+        if load_disclaimer_acceptance(self.disclaimer_path):
+            self.disclaimer_accepted.set()
         self.license_failure = ""
         self.license_failure_lock = Lock()
         self.state.capture_authorization = self.check_capture_authorization
@@ -1067,6 +1091,13 @@ class ConsoleServer(ThreadingHTTPServer):
     def check_capture_authorization(self) -> dict:
         """队列锁内只做验证，交给 HTTP 错误分支停止任务，避免重入任务锁。"""
         return self.require_authorization(stop_on_failure=False)
+
+    def accept_disclaimer(self) -> None:
+        """首次确认写入本机配置；保存成功后才放行业务接口。"""
+        with self.disclaimer_lock:
+            if not self.disclaimer_accepted.is_set():
+                save_disclaimer_acceptance(self.disclaimer_path)
+                self.disclaimer_accepted.set()
 
     def require_authorization(self, *, stop_on_failure: bool = True) -> dict:
         """按当前时间检查授权；已失效服务必须重启激活，不继续业务操作。"""
@@ -1149,9 +1180,6 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         try:
-            if path == "/api/private-chat/batch":
-                self._json(200, self.server.state.private_chat_batch.snapshot())
-                return
             if path in {"/", "/index.html"}:
                 body = load_console_html()
                 self.send_response(200)
@@ -1167,6 +1195,14 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
                 )
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if path == "/api/disclaimer/status":
+                self._json(200, {"accepted": self.server.disclaimer_accepted.is_set()})
+                return
+            if not self._check_disclaimer():
+                return
+            if path == "/api/private-chat/batch":
+                self._json(200, self.server.state.private_chat_batch.snapshot())
                 return
             if path == "/api/status":
                 self._json(200, self.server.state.snapshot())
@@ -1229,6 +1265,18 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         if not self._check_license():
             return
         try:
+            if self.path == "/api/disclaimer/accept":
+                origin = self.headers.get("Origin")
+                if origin and (urlparse(origin).scheme not in {"http", "https"}
+                               or urlparse(origin).netloc != self.headers.get("Host")):
+                    raise ValueError("不允许跨站确认使用须知")
+                if self._read_json().get("accepted") is not True:
+                    raise ValueError("请先阅读并确认使用须知")
+                self.server.accept_disclaimer()
+                self._json(200, {"ok": True})
+                return
+            if not self._check_disclaimer():
+                return
             if self.path in {"/api/private-chat/batch/start", "/api/private-chat/batch/stop"}:
                 origin = self.headers.get("Origin")
                 if origin and (urlparse(origin).scheme not in {"http", "https"}
@@ -1334,6 +1382,13 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         except (ValueError, OSError) as error:
             self._license_denied(str(error))
             return False
+
+    def _check_disclaimer(self) -> bool:
+        """确认前阻止业务请求，避免直接调用接口绕过页面弹窗。"""
+        if self.server.disclaimer_accepted.is_set():
+            return True
+        self._json(428, {"error": "请先阅读并确认使用须知", "code": "disclaimer_required"})
+        return False
 
     def _license_denied(self, reason: str) -> None:
         """返回结构化授权错误，让页面明确区分过期与其他校验失败。"""
