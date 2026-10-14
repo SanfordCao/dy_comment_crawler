@@ -9,6 +9,7 @@
 /* 默认完全隐藏提示，避免空提示在长页面截图或滚动时露出。 */
 .toast{visibility:hidden;opacity:0}.toast.show{visibility:visible;opacity:1}
 textarea{font:inherit;width:100%;padding:12px;border:1px solid #cfd9d1;border-radius:10px;resize:vertical;overflow-wrap:anywhere}textarea[readonly]{background:#f6f9f5;font-family:ui-monospace,monospace;font-size:13px}
+.inspect-card{margin-top:24px}.inspect-form{max-width:720px}.inspect-result strong{color:#12796c}
 </style>
 </head>
 <body><main>
@@ -42,6 +43,11 @@ textarea{font:inherit;width:100%;padding:12px;border:1px solid #cfd9d1;border-ra
 </form><div id="issueResult" class="result" hidden><p id="issueSummary"></p><label for="authorizationCode">完整签名授权码</label><textarea id="authorizationCode" rows="5" readonly spellcheck="false"></textarea><div class="actions"><button id="copyAuthorization" class="primary" type="button">复制签名</button></div><p class="hint">将完整授权码发给用户，包含签名、设备绑定及有效期信息。复制失败时可在上方手动全选复制，无需重新签发。</p></div>
 </section>
 </div>
+<section class="card inspect-card"><div class="step">03 · 授权查询</div><h2>反查授权码到期时间</h2><p>粘贴完整授权码，使用当前发行公钥核对签名后显示到期时间；已过期的授权码也能查询。查询不需要私钥或密码。</p>
+<form id="inspectForm" class="inspect-form"><label for="inspectCode">完整授权码</label><textarea id="inspectCode" rows="4" maxlength="100000" spellcheck="false" placeholder="粘贴 DYLIC2- 开头的完整授权码" required></textarea><div class="actions"><button id="inspect" class="primary" type="submit">查询到期时间</button></div></form>
+<div id="inspectResult" class="result inspect-result" role="status" aria-live="polite" hidden><strong>签名核验通过</strong><p id="inspectExpiry"></p><p id="inspectLicenseId" class="hint"></p></div>
+<p class="hint">此处只核对授权码内容与签名，不判断当前设备是否匹配，也不联网校时；客户端能否使用仍以启动时的校验结果为准。</p>
+</section>
 <footer><p class="hint">只将完整签名授权码发给用户，不能发送私钥或管理员工具。关闭页面不会关闭本机服务。</p></footer>
 </main>
 <dialog id="clearDialog"><h2>清除临时密钥？</h2><p>请确认公钥和加密私钥都已下载并妥善保存。清除后本页无法恢复这些密钥。</p><div class="actions"><button id="cancelClear" type="button">取消</button><button id="confirmClear" class="danger" type="button">确认清除</button></div></dialog>
@@ -87,6 +93,8 @@ async function forgetKey(){if(!deletingKey)return;el('confirmForget').disabled=t
 function trimDeviceCode(){el('deviceCode').value=el('deviceCode').value.trim();}
 /** 显式提交一次签发，失败不自动重试；发送后立即清空密码。 */
 async function issueLicense(event){event.preventDefault();if(el('issue').disabled)return;el('issue').disabled=true;el('issueResult').hidden=true;el('authorizationCode').value='';try{trimDeviceCode();const deviceCode=el('deviceCode').value;if(!/^DY1-(?:[A-F0-9]{8}-){7}[A-F0-9]{8}$/.test(deviceCode))throw new Error('设备码格式无效，请粘贴完整设备码');const keyId=el('keySource').value;if(!keyId)throw new Error('请先上传并选择私钥文件');const result=await api('/api/issue',{key_id:keyId,device_code:deviceCode,password:el('signPassword').value,expires:el('expires').value});const payload=result.license.payload;el('authorizationCode').value=result.authorization_code;el('issueSummary').textContent='授权已签发；编号：'+payload.license_id+'；到期：'+payload.expires_at;el('issueResult').hidden=false;await copyAuthorization();}catch(error){notice(error.message,true);}finally{el('signPassword').value='';el('issue').disabled=false;}}
+/** 授权码查询只显示服务端验签通过的结果，失败时清空旧结果，避免误认旧有效期。 */
+async function inspectLicense(event){event.preventDefault();if(el('inspect').disabled)return;el('inspect').disabled=true;el('inspectResult').hidden=true;el('inspectExpiry').textContent='';el('inspectLicenseId').textContent='';try{const result=await api('/api/inspect',{authorization_code:el('inspectCode').value});el('inspectExpiry').textContent='有效期截止（北京时间）：'+result.expires_at_beijing;el('inspectLicenseId').textContent='授权编号：'+result.license_id;el('inspectResult').hidden=false;}catch(error){notice(error.message,true);}finally{el('inspect').disabled=false;}}
 /** 复制完整签名载荷，失败保留结果供手工复制，不重新签发授权。 */
 async function copyAuthorization(){const code=el('authorizationCode').value;if(!code)return;try{await navigator.clipboard.writeText(code);notice('签名授权码已复制，请发送给用户。');}catch(error){el('authorizationCode').focus();el('authorizationCode').select();notice('授权已生成，浏览器未允许复制；请手动复制上方完整授权码。',true);}}
 /** 清除内存密钥需要确认，避免管理员误操作丢失未下载内容。 */
@@ -95,6 +103,6 @@ function askClear(){el('clearDialog').showModal();}
 function cancelClear(){el('clearDialog').close();}
 /** 解除临时密钥引用，不删除已下载的任何文件。 */
 function clearKeys(){generatedKeys=null;el('keyResult').hidden=true;el('generate').disabled=false;el('signPassword').value='';el('clearDialog').close();notice('临时密钥已清除，已下载及上传文件不受影响。');}
-el('keyForm').addEventListener('submit',generateKeys);el('downloadPublic').addEventListener('click',downloadPublic);el('downloadPrivate').addEventListener('click',downloadPrivate);el('clearKeys').addEventListener('click',askClear);el('cancelClear').addEventListener('click',cancelClear);el('confirmClear').addEventListener('click',clearKeys);el('keySource').addEventListener('change',updateKeySource);el('uploadKey').addEventListener('click',uploadKey);el('deviceCode').addEventListener('input',trimDeviceCode);el('issueForm').addEventListener('submit',issueLicense);el('copyAuthorization').addEventListener('click',copyAuthorization);el('forgetKey').addEventListener('click',askForgetKey);el('cancelForget').addEventListener('click',cancelForgetKey);el('confirmForget').addEventListener('click',forgetKey);loadSavedKey();
+el('keyForm').addEventListener('submit',generateKeys);el('downloadPublic').addEventListener('click',downloadPublic);el('downloadPrivate').addEventListener('click',downloadPrivate);el('clearKeys').addEventListener('click',askClear);el('cancelClear').addEventListener('click',cancelClear);el('confirmClear').addEventListener('click',clearKeys);el('keySource').addEventListener('change',updateKeySource);el('uploadKey').addEventListener('click',uploadKey);el('deviceCode').addEventListener('input',trimDeviceCode);el('issueForm').addEventListener('submit',issueLicense);el('inspectForm').addEventListener('submit',inspectLicense);el('inspectCode').addEventListener('input',()=>{el('inspectResult').hidden=true});el('copyAuthorization').addEventListener('click',copyAuthorization);el('forgetKey').addEventListener('click',askForgetKey);el('cancelForget').addEventListener('click',cancelForgetKey);el('confirmForget').addEventListener('click',forgetKey);loadSavedKey();
 </script>
 </body></html>

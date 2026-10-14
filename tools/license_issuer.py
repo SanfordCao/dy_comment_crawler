@@ -19,9 +19,11 @@ from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from offline_license import PRODUCT, DEVICE_PATTERN, LICENSE_SCHEMA_VERSION, canonical_json, encode_license_code, _unique_object
+from offline_license import (PRODUCT, DEVICE_PATTERN, LICENSE_SCHEMA_VERSION, LicenseError,
+                             canonical_json, decode_license_code, encode_license_code, utc_time, _unique_object)
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 
 def generate_key_pair(password: str) -> tuple[bytes, bytes]:
@@ -89,6 +91,35 @@ def issue_license_for_device(code: str, private_pem: bytes, password: str, expir
         raise ValueError("设备码格式无效，请粘贴客户端复制的完整设备码")
     request = {"schema_version": LICENSE_SCHEMA_VERSION, "product": PRODUCT, "device_code": code.strip()}
     return issue_license_bytes(request, private_pem, password, expiry_date)
+
+
+def inspect_license_code(code: str, public_key: Path | None = None) -> dict[str, str]:
+    """验签后反查授权码的北京时间到期时间；已过期的签名仍可核验。"""
+    data = decode_license_code(code)
+    payload = data["payload"]
+    if (payload.get("product") != PRODUCT or type(payload.get("schema_version")) is not int
+            or payload["schema_version"] != LICENSE_SCHEMA_VERSION
+            or not isinstance(payload.get("device_code"), str)
+            or not re.fullmatch(DEVICE_PATTERN, payload["device_code"])
+            or not isinstance(payload.get("license_id"), str) or not payload["license_id"].strip()):
+        raise ValueError("授权码的产品、版本或设备信息无效")
+    issued_at, expires_at = utc_time(payload.get("issued_at")), utc_time(payload.get("expires_at"))
+    if expires_at <= issued_at:
+        raise ValueError("授权码的到期时间无效")
+    key_path = public_key or Path(__file__).resolve().parents[1] / "src" / "licensing" / "license_public_key.pem"
+    try:
+        key = serialization.load_pem_public_key(key_path.read_bytes())
+    except (OSError, ValueError, TypeError) as error:
+        raise ValueError("无法读取发行公钥，请检查 src/licensing/license_public_key.pem") from error
+    if not isinstance(key, Ed25519PublicKey):
+        raise ValueError("发行公钥不是 Ed25519 类型")
+    try:
+        signature = base64.b64decode(data["signature"], validate=True)
+        key.verify(signature, canonical_json(payload))
+    except (InvalidSignature, ValueError) as error:
+        raise ValueError("授权签名无效：授权码可能被修改，或与当前发行公钥不匹配") from error
+    return {"license_id": payload["license_id"],
+            "expires_at_beijing": expires_at.astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")}
 
 
 class SavedKeyStore:
@@ -270,6 +301,12 @@ class IssuerHandler(BaseHTTPRequestHandler):
                 private_pem = self.server.saved_keys.read(data.get("key_id"))
                 signed = issue_license_for_device(data.get("device_code"), private_pem, data.get("password"), data.get("expires"))
                 self._json(200, {"license": signed, "authorization_code": encode_license_code(signed), **self.server.saved_keys.status()})
+            elif self.path == "/api/inspect":
+                # 查询只读取授权码和发行公钥，不使用私钥，也不要求授权尚未到期。
+                try:
+                    self._json(200, inspect_license_code(data.get("authorization_code")))
+                except (LicenseError, ValueError) as error:
+                    self._json(400, {"error": str(error)})
             elif self.path == "/api/key/upload":
                 private = data.get("private_pem")
                 if not isinstance(private, str) or len(private) > 65536:
