@@ -1,0 +1,49 @@
+<div id="presetNameDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="presetNameTitle">
+        <h2 id="presetNameTitle">保存配置方案</h2>
+        <p>输入名称后保存，不会自动切换当前使用配置。</p>
+        <div class="field"><label for="presetName">配置方案名称</label><input id="presetName" maxlength="50"
+                                                                              placeholder="例如：全量评论、快速采集"
+                                                                              autocomplete="off"></div>
+        <p id="presetNameError" class="dialog-error" hidden></p>
+        <div class="dialog-actions">
+            <button id="cancelPresetName" type="button" class="btn">取消</button>
+            <button id="confirmPresetName" type="button" class="btn primary">保存</button>
+        </div>
+    </section>
+</div>
+<div id="presetDeleteDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="presetDeleteTitle"
+             aria-describedby="presetDeleteDescription">
+        <div class="dialog-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 6h18M8 6V4h8v2m3 0-.8 14H5.8L5 6m4 4v6m6-6v6"/>
+            </svg>
+        </div>
+        <h2 id="presetDeleteTitle">删除这套配置方案？</h2>
+        <p id="presetDeleteDescription">只删除已保存的方案，当前设置和采集结果不受影响。</p>
+        <div id="presetDeleteName" class="dialog-name"></div>
+        <div class="dialog-actions">
+            <button id="cancelDeletePreset" type="button" class="btn">取消</button>
+            <button id="confirmDeletePreset" type="button" class="btn danger">删除方案</button>
+        </div>
+    </section>
+</div>
+<div id="stoppingDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="stoppingTitle">
+        <div class="stopping-header">
+            <div class="dialog-icon" style="background:#fff5d7;color:#987217">⏳</div>
+            <h2 id="stoppingTitle">正在停止采集任务</h2></div>
+        <p style="margin-top:12px">请稍候，当前采集操作结束后会自动停止并保存已采集数据。</p></section>
+</div>
+<div id="shareValidationDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="shareValidationTitle">
+        <h2 id="shareValidationTitle">分享文本校验未通过</h2>
+        <p>以下分享文本无效，未启动任何采集任务。请修改后重新点击启动，全部通过后才会开始采集。</p>
+        <div id="shareValidationIssues" style="max-height:40vh;overflow:auto;overflow-wrap:anywhere"></div>
+        <div class="dialog-actions">
+            <button id="closeShareValidationDialog" class="btn primary" type="button">返回修改</button>
+        </div>
+    </section>
+</div>

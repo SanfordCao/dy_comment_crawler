@@ -136,6 +136,45 @@ def export_comment_rows(comments: list[dict[str, Any]], output_path: Path,
     return len(comments)
 
 
+def export_reply_rows(matches: list[dict[str, Any]], output_path: Path) -> int:
+    """Export matched comments with their per-video reply text and outcome."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+    except ImportError as error:
+        raise RuntimeError("缺少 openpyxl。请先安装项目依赖") from error
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "评论回复"
+    sheet.freeze_panes = "A2"
+    sheet.append(("任务 ID", "评论 ID", "评论文字", "作者", "抖音号", "IP 属地",
+                  "发布时间", "回复文字", "发送状态", "错误说明", "发送时间"))
+    for cell in sheet[1]:
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.fill = PatternFill("solid", fgColor="0F766E")
+    for item in matches:
+        comment = item.get("comment") or {}
+        author = comment.get("author") or {}
+        sheet.append((str(item.get("_run_id") or ""), str(item.get("comment_id") or ""),
+                      str(comment.get("text") or ""), str(author.get("nickname") or ""),
+                      str(author.get("unique_id") or "未获取"), str(comment.get("ip_label") or ""),
+                      str(comment.get("create_time_iso") or ""), str(item.get("reply_text") or ""),
+                      str(item.get("status") or ""), str(item.get("error") or ""),
+                      str(item.get("sent_at") or "")))
+    for row in sheet.iter_rows(min_row=2):
+        for cell in row:
+            # 外部评论及昵称可能以公式字符开头，必须按纯文本写入。
+            cell.data_type = "s"
+            cell.alignment = Alignment(vertical="top", wrap_text=cell.column in {3, 8, 10})
+    for column, width in {"A": 35, "B": 25, "C": 60, "D": 20, "E": 24,
+                          "F": 14, "G": 24, "H": 60, "I": 16, "J": 48, "K": 24}.items():
+        sheet.column_dimensions[column].width = width
+    sheet.auto_filter.ref = f"A1:K{max(2, len(matches) + 1)}"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(output_path)
+    return len(matches)
+
+
 def _read_json_path_from_console() -> Path:
     entered = input("请输入 comments.json 文件路径，然后按回车：").strip().strip('"')
     if not entered:

@@ -1,0 +1,79 @@
+    <section id="xpathConfig" class="view">
+        <div class="card config-layout">
+            <aside class="config-sidebar" role="tablist" aria-label="高级配置分类" aria-orientation="vertical">
+                <button id="xpathCategory" class="config-category" type="button" role="tab" aria-selected="true"
+                        aria-controls="xpathSettings">采集 XPath 配置
+                </button>
+                <button id="otherCategory" class="config-category" type="button" role="tab" aria-selected="false"
+                        aria-controls="otherSettings">采集接口配置
+                </button>
+                <button id="replyXpathCategory" class="config-category" type="button" role="tab" aria-selected="false"
+                        aria-controls="replyXpathSettings">回复 XPath 配置
+                </button>
+            </aside>
+            <div id="xpathSettings" class="config-panel" role="tabpanel" aria-labelledby="xpathCategory">
+                <h2>页面操作 XPath</h2>
+                <p style="margin:-8px 0 20px;color:var(--muted)">采集顺序：打开独立视频页并暂停 →
+                    等待视频信息接口 → 从自动显示的评论列表采集。配置统一保存在本机项目目录中。</p>
+                <div class="field"><label for="pauseXpath">暂停按钮 XPath</label><textarea id="pauseXpath"
+                                                                                           rows="3"></textarea><small>视频打开、登录或验证完成后，先点击此节点暂停视频。已暂停时不会重复点击；留空则跳过，点击失败会记录日志并继续采集。</small>
+                </div>
+                <div class="field"><label for="privateChatXpath">私信按钮 XPath</label><textarea id="privateChatXpath"
+                                                                                                 rows="3"></textarea><small>用于用户主页的私信入口，单条和批量私信共用；必须填写并保存，不自动匹配。仍需先核对主页身份。</small>
+                </div>
+                <div class="field"><label for="sendMessageXpath">私信发送按钮 XPath</label><textarea
+                        id="sendMessageXpath" rows="3"></textarea><small>用于聊天界面的发送按钮，单条和批量私信共用；必须填写并保存，不自动匹配。未配置时不填写或发送消息。</small>
+                </div>
+                <div class="field"><label for="closeChatPanelXpath">消息面板关闭按钮 XPath</label><textarea
+                        id="closeChatPanelXpath" rows="3"></textarea><small>首次打开后未进入会话时，按此配置关闭消息面板，再补点一次私信入口。单条和批量共用；留空则停止恢复，不自动匹配、不强制点击。</small>
+                </div>
+                <div class="actions">
+                    <button id="saveXpath" class="btn primary">保存配置</button>
+                    <button id="clearXpath" class="btn">清空</button>
+                </div>
+            </div>
+            <div id="otherSettings" class="config-panel" role="tabpanel" aria-labelledby="otherCategory" hidden>
+                <h2>采集接口配置</h2>
+                <p style="color:var(--muted)">监听浏览器响应，按接口关键路径匹配，再通过 JSON 路径读取当前视频信息。只接受视频
+                    ID 与当前任务一致的数据，不回退 HTML。</p>
+                <h3>作者昵称</h3>
+                <div class="field"><label for="authorApiPath">接口关键路径</label><input id="authorApiPath" type="text"
+                                                                                         maxlength="4096"><small>只填写路径，不含域名和查询参数，例如
+                    /aweme/v1/web/aweme/detail/。</small></div>
+                <div class="field"><label for="authorJsonPath">JSON 路径</label><input id="authorJsonPath" type="text"
+                                                                                       maxlength="4096"><small>例如
+                    aweme_detail.author.nickname；支持点分对象路径和数字数组索引。</small></div>
+                <h3>视频标题</h3>
+                <div class="field"><label for="titleApiPath">接口关键路径</label><input id="titleApiPath" type="text"
+                                                                                        maxlength="4096"></div>
+                <div class="field"><label for="titleJsonPath">JSON 路径</label><input id="titleJsonPath" type="text"
+                                                                                      maxlength="4096"><small>例如
+                    aweme_detail.item_title。接口或 JSON 路径留空则停用该字段。</small></div>
+                <div class="actions">
+                    <button id="saveApiSettings" class="btn primary" type="button">保存配置</button>
+                    <button id="clearApiSettings" class="btn" type="button">清空</button>
+                </div>
+            </div>
+            <div id="replyXpathSettings" class="config-panel" role="tabpanel" aria-labelledby="replyXpathCategory"
+                 hidden>
+                <h2>回复 XPath 配置</h2>
+                <p style="color:var(--muted)">评论 ID
+                    定位卡片后，回复按钮、输入框和发送图标均在同一卡片内查找。页面结构变化时请重新核对。</p>
+                <div class="field"><label for="replyCardXpath">评论容器 XPath</label><textarea id="replyCardXpath"
+                                                                                               rows="2"></textarea><small>需包含
+                    {comment_id}。</small></div>
+                <div class="field"><label for="replyButtonXpath">回复按钮 XPath</label><textarea id="replyButtonXpath"
+                                                                                                 rows="2"></textarea><small>相对于目标评论容器，以
+                    .// 开头。</small></div>
+                <div class="field"><label for="replyEditorXpath">回复输入框 XPath</label><textarea id="replyEditorXpath"
+                                                                                                   rows="2"></textarea><small>相对于目标评论容器，以
+                    .// 开头。</small></div>
+                <div class="field"><label for="replySendXpath">发布按钮 XPath</label><textarea id="replySendXpath"
+                                                                                               rows="2"></textarea><small>相对于目标评论容器，以
+                    .// 开头。</small></div>
+                <div class="actions">
+                    <button id="saveReplyXpaths" type="button" class="btn primary">保存回复 XPath</button>
+                </div>
+            </div>
+        </div>
+    </section>

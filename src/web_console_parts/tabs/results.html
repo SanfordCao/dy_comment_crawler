@@ -1,0 +1,81 @@
+    <section id="history" class="view">
+        <div class="history-layout">
+            <aside class="card">
+                <div class="summary"><h2>历史任务</h2>
+                    <div class="history-actions">
+                        <button id="refresh" class="icon-button" type="button" title="刷新历史任务"
+                                aria-label="刷新历史任务">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                                 aria-hidden="true">
+                                <path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/>
+                            </svg>
+                        </button>
+                        <button id="exportMerged" type="button" class="icon-button" title="合并成一个文件"
+                                aria-label="合并成一个文件" disabled>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M3 2h5v6H3zM16 2h5v6h-5zM5.5 10v2L12 15l6.5-3v-2M12 15v3m-2-2 2 2 2-2M8 19h8v3H8z"/>
+                            </svg>
+                        </button>
+                        <button id="exportSeparate" type="button" class="icon-button" title="分别下载多个文件"
+                                aria-label="分别下载多个文件" disabled>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M4 15H2V2h11v3M7 18H5V5h11v3M8 8h11v6M8 8v13h5M18 14v8m-3-3 3 3 3-3"/>
+                            </svg>
+                        </button>
+                        <button id="deleteRuns" class="icon-button" type="button" title="删除所选任务"
+                                aria-label="删除所选任务" disabled>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                                 aria-hidden="true">
+                                <path d="M3 6h18M8 6V4h8v2m3 0-.8 14H5.8L5 6m4 4v6m6-6v6"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="field"><label for="historyTaskType">结果类型</label><select id="historyTaskType">
+                    <option value="capture">采集评论</option>
+                    <option value="reply">评论回复</option>
+                </select></div>
+                <label class="history-selection"><input id="selectAllRuns" class="run-check" type="checkbox">全选<span
+                        id="runSelectionCount">已选 0 项</span></label>
+                <div id="runs" class="runs">
+                    <div class="empty">正在读取…</div>
+                </div>
+            </aside>
+            <section class="card">
+                <div class="summary">
+                    <div class="selected-run-heading"><h2 id="runTitle">选择一个结果</h2>
+                        <p id="runMeta">查看评论并下载 Excel</p></div>
+                </div>
+                <div class="toolbar"><input id="search" placeholder="搜索评论、作者或地区"><select id="sort">
+                    <option value="source">原始顺序</option>
+                    <option value="likes">点赞最多</option>
+                    <option value="newest">最新发布</option>
+                </select>
+                    <button id="historyAdvancedToggle" class="history-advanced" type="button" aria-expanded="false"
+                            aria-controls="historyAdvancedPanel"><span id="historyAdvancedLabel">高级筛选</span>
+                    </button>
+                    <div id="historyAdvancedPanel" class="time-filter" hidden>
+                        <label for="commentAfter">评论发表于此时间之后</label><input id="commentAfter"
+                                                                                     type="datetime-local" step="1"
+                                                                                     aria-describedby="commentAfterHelp"><small
+                            id="commentAfterHelp">按本机时区筛选；留空显示全部时间</small>
+                        <button id="clear" class="btn" type="button">清空筛选</button>
+                    </div>
+                </div>
+                <div id="historyChatActions" class="bulk-chat-actions">
+                    <label><input id="selectVisibleChatUsers" class="run-check" type="checkbox">选择当前显示用户</label>
+                    <span id="chatSelectionCount">已选 0 位用户</span>
+                    <button id="openBulkChat" class="btn" type="button" disabled>批量私信</button>
+                    <span id="bulkChatSummary" role="status" aria-live="polite"></span>
+                </div>
+                <div class="comments-scroll">
+                    <div id="comments" class="comments">
+                        <div class="empty">从左侧选择一次采集结果</div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </section>
+

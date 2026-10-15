@@ -1,0 +1,24 @@
+<div id="replyPresetNameDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="replyPresetNameTitle">
+        <h2 id="replyPresetNameTitle">保存回复配置方案</h2>
+        <p>方案只保存地区、关键词、加载方式和运行时长；保存后不会自动应用。</p>
+        <div class="field"><label for="replyPresetName">配置方案名称</label><input id="replyPresetName" maxlength="50"
+                                                                                   autocomplete="off"></div>
+        <p id="replyPresetNameError" class="dialog-error" hidden></p>
+        <div class="dialog-actions">
+            <button id="cancelReplyPresetName" type="button" class="btn">取消</button>
+            <button id="confirmReplyPresetName" type="button" class="btn primary">保存</button>
+        </div>
+    </section>
+</div>
+<div id="replyPresetDeleteDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="replyPresetDeleteTitle">
+        <h2 id="replyPresetDeleteTitle">删除这套回复配置？</h2>
+        <p>只删除已保存的方案，视频分享文本和回复结果不受影响。</p>
+        <div id="replyPresetDeleteName" class="dialog-name"></div>
+        <div class="dialog-actions">
+            <button id="cancelReplyPresetDelete" type="button" class="btn">取消</button>
+            <button id="confirmReplyPresetDelete" type="button" class="btn danger">删除方案</button>
+        </div>
+    </section>
+</div>

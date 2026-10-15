@@ -1,0 +1,6 @@
+{
+  "comment_card_xpath": "//*[@data-e2e='comment-item'][.//*[@id='tooltip_{comment_id}']]",
+  "reply_button_xpath": ".//div[@tabindex='0' and @data-popupid][.//span[normalize-space(.)='回复']]",
+  "reply_editor_xpath": ".//*[contains(concat(' ', normalize-space(@class), ' '), ' comment-input-inner-container ')]//*[@contenteditable='true' and contains(concat(' ', normalize-space(@class), ' '), ' public-DraftEditor-content ')]",
+  "reply_send_xpath": ".//*[contains(concat(' ', normalize-space(@class), ' '), ' commentInput-right-ct ')]/div/span[last()]"
+}

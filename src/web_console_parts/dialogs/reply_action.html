@@ -1,0 +1,14 @@
+<div id="replyDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="replyDialogTitle">
+        <h2 id="replyDialogTitle">回复匹配评论</h2>
+        <p id="replyDialogAuthor"></p>
+        <p id="replyDialogComment" class="reply-note"></p>
+        <div class="field"><label for="replyDraft">回复内容</label><textarea id="replyDraft" rows="4"
+                                                                             maxlength="500"></textarea></div>
+        <p id="replyDialogError" class="dialog-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+            <button id="skipReply" type="button" class="btn">跳过本条</button>
+            <button id="submitReply" type="button" class="btn primary">回复并发布</button>
+        </div>
+    </section>
+</div>

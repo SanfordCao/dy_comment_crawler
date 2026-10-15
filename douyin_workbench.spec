@@ -24,10 +24,13 @@ create_icon = runpy.run_path(str(root / 'src' / 'app_icon.py'))['create_app_icon
 create_icon().save(icon_path, format='ICO', sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 datas = [
     (str(root / 'src' / 'web_console.html'), '.'),
+    # 四个 Tab、共享组件、样式和脚本由服务端组合成一个受 CSP 保护的页面。
+    (str(root / 'src' / 'web_console_parts'), 'web_console_parts'),
     (str(public_key), 'licensing'),
 ] + collect_data_files('customtkinter')
 # 只打包持久化配置，不把运行队列或以后误放的密钥带给用户。
-for name in ('web_console_settings.json', 'capture_settings.json', 'capture_presets.json'):
+for name in ('web_console_settings.json', 'capture_settings.json', 'capture_presets.json',
+             'comment_reply_xpath.json', 'reply_presets.json'):
     config = root / 'src' / 'config' / name
     if not config.is_file():
         raise SystemExit(f'缺少默认配置：{config}')

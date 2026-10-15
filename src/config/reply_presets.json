@@ -1,0 +1,17 @@
+{
+  "selected": "",
+  "default_enabled": true,
+  "settings": {
+    "region": "",
+    "keywords": [],
+    "source_mode": "page_first",
+    "max_minutes": 30
+  },
+  "default_settings": {
+    "region": "",
+    "keywords": [],
+    "source_mode": "page_first",
+    "max_minutes": 30
+  },
+  "presets": []
+}

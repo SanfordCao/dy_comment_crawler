@@ -1,0 +1,114 @@
+    <section id="crawl" class="view active">
+        <div class="grid">
+            <div class="card capture-card">
+                <h2>采集配置</h2>
+                <div class="field"><label for="url">抖音视频链接</label>
+                    <div id="videoLinks" class="video-links"></div>
+                    <small>请粘贴完整分享文本，不接受单独网址（包括带 modal_id
+                        的链接）。启动前解析全部视频链接，全部通过才采集；空输入框忽略。</small></div>
+                <!-- 采集操作常驻设置上方，折叠设置时仍可启动或停止任务。 -->
+                <div class="actions">
+                    <button id="start" class="btn primary">启动采集任务</button>
+                    <button id="stop" class="btn danger" disabled>停止采集任务</button>
+                </div>
+                <!-- 队列常驻设置上方，折叠配置时仍能查看本轮任务进度。 -->
+                <section id="batchProgress" class="batch-progress" hidden>
+                    <div class="summary"><strong>采集队列</strong><span id="batchSummary"></span></div>
+                    <div id="batchItems" class="batch-items"></div>
+                </section>
+                <button id="advancedToggle" class="advanced-toggle" type="button" aria-expanded="true"
+                        aria-controls="advancedSettings"><span>设置</span><span
+                        id="advancedToggleLabel">收起　⌃</span></button>
+                <!-- 除视频链接外，采集选项统一放入设置；折叠不影响取值和自动保存。 -->
+                <div id="advancedSettings" class="advanced-settings">
+                    <!-- 命名方案与当前表单分别保存，调整选项不会悄悄覆盖旧方案。 -->
+                    <div id="presetManager" class="preset-manager">
+                        <div class="preset-table-wrap">
+                            <table class="preset-table">
+                                <thead>
+                                <tr>
+                                    <th scope="col">配置方案</th>
+                                    <th scope="col">使用状态</th>
+                                    <th scope="col">操作</th>
+                                </tr>
+                                </thead>
+                                <tbody id="presetRows"></tbody>
+                            </table>
+                        </div>
+                        <small id="presetHint">查看不会改变当前使用配置。</small>
+                    </div>
+                    <div class="preset-detail-header"><strong id="presetDetailTitle">当前使用配置</strong>
+                        <div class="actions">
+                            <button id="savePreset" type="button" class="btn primary" hidden>保存方案</button>
+                            <button id="updatePreset" type="button" class="btn" hidden>保存修改</button>
+                            <button id="cancelPresetEdit" type="button" class="btn" hidden>取消编辑</button>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="field"><label for="commentScope">评论层级</label><select id="commentScope">
+                            <option value="top_level" selected>仅一级评论（默认）</option>
+                            <option value="all">所有层级评论</option>
+                        </select><small>所有层级将运行至完整加载</small></div>
+                        <div class="field"><label for="fetchMode">一级评论加载方式</label><select id="fetchMode">
+                            <option value="network_first" selected>接口优先（失败自动滚动）</option>
+                            <option value="scroll_only">仅页面滚动</option>
+                        </select><small>接口失败时自动回到页面滚动</small></div>
+                    </div>
+                    <div class="field"><label for="maxComments">最多评论数</label><input id="maxComments" type="number"
+                                                                                         min="0" value="0"><small>0
+                        表示不限制</small></div>
+                    <div class="field"><label for="fetchDouyinId" class="account-toggle"><input id="fetchDouyinId"
+                                                                                                type="checkbox"
+                                                                                                role="switch"
+                                                                                                aria-describedby="douyinIdHelp"><span
+                            class="account-switch" aria-hidden="true"></span>获取抖音号</label><small id="douyinIdHelp">默认关闭。开启后，评论接口缺失的抖音号会通过用户主页接口补充，同一用户只查询一次；额外访问主页可能影响性能、增加采集耗时。</small>
+                    </div>
+                    <div class="field"><label for="concurrent" class="account-toggle"><input id="concurrent"
+                                                                                             type="checkbox"
+                                                                                             role="switch"
+                                                                                             aria-describedby="concurrentHelp"><span
+                            class="account-switch" aria-hidden="true"></span>并发采集</label><small id="concurrentHelp">默认关闭，按顺序采集。开启后可设置并发数量；数量越大，内存和请求越多，更容易触发验证。遇到验证会暂停启动新任务。</small>
+                    </div>
+                    <div id="concurrencyOptions" class="field" hidden><label
+                            for="concurrencyLimit">同时采集的视频数量</label><input id="concurrencyLimit" type="number"
+                                                                                    min="1" max="100" step="1"
+                                                                                    value="2"><small>默认 2，可设置
+                        1–100；实际并发不超过待采集的视频数量。</small></div>
+                    <div class="row">
+                        <div class="field"><label for="maxMinutes">最长运行时间</label><input id="maxMinutes"
+                                                                                              type="number" min="1"
+                                                                                              value="30"><small>单位：分钟</small>
+                        </div>
+                        <div class="field"><label for="direction">加载方向</label><select id="direction">
+                            <option value="down">向下</option>
+                            <option value="up">向上</option>
+                        </select></div>
+                        <div class="field"><label for="minDelay">最短滚动等待</label><input id="minDelay" type="number"
+                                                                                            min="500"
+                                                                                            value="800"><small>单位：毫秒</small>
+                        </div>
+                        <div class="field"><label for="maxDelay">最长滚动等待</label><input id="maxDelay" type="number"
+                                                                                            min="500"
+                                                                                            value="1400"><small>单位：毫秒</small>
+                        </div>
+                        <div class="field"><label for="waitMinutes">登录等待时间</label><input id="waitMinutes"
+                                                                                               type="number" min="1"
+                                                                                               value="30"><small>单位：分钟</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="card log-card">
+                <div class="statusline"><span id="dot" class="dot"></span><strong id="statusText">等待开始</strong>
+                </div>
+                <div id="waiting" class="waiting"><strong>需要人工操作</strong>
+                    <div>请在程序打开的 Chrome 窗口中完成登录或验证，然后点击继续。</div>
+                    <button id="continue" class="btn primary" style="margin-top:10px">登录完成，继续</button>
+                </div>
+                <div id="logEmpty" class="log-empty">暂无采集任务，启动后将在这里分别显示每个视频的日志。</div>
+                <div id="log" class="log" hidden></div>
+                <div id="taskLogs" class="task-logs" hidden></div>
+            </div>
+        </div>
+    </section>
+

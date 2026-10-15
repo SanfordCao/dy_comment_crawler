@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 import re
 
@@ -295,8 +295,10 @@ def parse_top_level_comment(
 
 
 class CommentStore:
-    def __init__(self) -> None:
+    def __init__(self, on_added: Callable[[dict[str, Any]], None] | None = None) -> None:
+        """Keep comments deduplicated and optionally report each newly discovered ID."""
         self._comments: dict[str, dict[str, Any]] = {}
+        self._on_added = on_added
 
     def add(
         self,
@@ -320,7 +322,7 @@ class CommentStore:
         return self._add_parsed(parsed)
 
     def _add_parsed(self, parsed: dict[str, Any]) -> bool:
-
+        """Merge existing comments; notify the reply queue only on the first insert."""
         existing = self._comments.get(parsed["id"])
         if existing is not None:
             for key, value in parsed["author"].items():
@@ -339,6 +341,8 @@ class CommentStore:
             return False
 
         self._comments[parsed["id"]] = parsed
+        if self._on_added is not None:
+            self._on_added(parsed)
         return True
 
     def add_tree(
@@ -385,6 +389,10 @@ class CommentStore:
 
     def __len__(self) -> int:
         return len(self._comments)
+
+    def get(self, comment_id: str) -> dict[str, Any] | None:
+        """Return a known comment by API ID without scanning the entire store."""
+        return self._comments.get(comment_id)
 
     def values(self) -> list[dict[str, Any]]:
         return list(self._comments.values())

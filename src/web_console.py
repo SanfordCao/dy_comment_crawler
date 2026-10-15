@@ -10,7 +10,7 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from tempfile import TemporaryDirectory
 from typing import Any, Callable
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 from uuid import uuid4
 import asyncio
 import json
@@ -28,7 +28,9 @@ try:
     from .browser_session import BrowserSession
     from .private_chat import open_user_chat, send_user_message, validated_message, validated_sec_uid
     from .private_chat_batch import PrivateChatBatch
-    from .export_comments_excel import export_comments_to_excel, export_comment_rows
+    from .comment_reply_workbench import CommentReplyCoordinator
+    from .reply_presets import ReplyPresetStore
+    from .export_comments_excel import export_comments_to_excel, export_comment_rows, export_reply_rows
     from .output import read_result_json
     from .video_links import resolve_video_link, parse_share_texts, resolve_share_rows, ShareValidationError
     from .video_metadata import METADATA_DEFAULTS, validate_metadata_settings
@@ -37,7 +39,9 @@ except ImportError:
     from browser_session import BrowserSession
     from private_chat import open_user_chat, send_user_message, validated_message, validated_sec_uid
     from private_chat_batch import PrivateChatBatch
-    from export_comments_excel import export_comments_to_excel, export_comment_rows
+    from comment_reply_workbench import CommentReplyCoordinator
+    from reply_presets import ReplyPresetStore
+    from export_comments_excel import export_comments_to_excel, export_comment_rows, export_reply_rows
     from video_links import resolve_video_link, parse_share_texts, resolve_share_rows, ShareValidationError
     from video_metadata import METADATA_DEFAULTS, validate_metadata_settings
 from output import read_result_json
@@ -53,6 +57,7 @@ CAPTURE_DEFAULTS = {
 
 PACKAGED_CONFIG_FILES = (
     "web_console_settings.json", "capture_settings.json", "capture_presets.json",
+    "comment_reply_xpath.json", "reply_presets.json",
 )
 
 
@@ -101,8 +106,54 @@ def initialize_packaged_config(project_root: Path) -> None:
             continue
 
 
+WEB_CONSOLE_SCRIPTS = (
+    "common.js",
+    "reply.js",
+    "shared_ui.js",
+    "capture_settings.js",
+    "advanced_config.js",
+    "capture.js",
+    "results.js",
+    "bootstrap.js",
+)
+
+WEB_CONSOLE_FRAGMENTS = (
+    "styles.css",
+    "components/disclaimer.html",
+    "components/navigation.html",
+    "tabs/capture.html",
+    "tabs/reply.html",
+    "tabs/results.html",
+    "tabs/advanced_config.html",
+    "dialogs/reply_action.html",
+    "dialogs/results.html",
+    "dialogs/reply_presets.html",
+    "dialogs/capture.html",
+    "components/overlays.html",
+)
+
+
 def load_console_html() -> bytes:
-    return Path(__file__).with_name("web_console.html").read_bytes()
+    """把各 Tab 与公共组件合成原有单页，保持内联脚本的执行顺序和 CSP。"""
+    root = Path(__file__).with_name("web_console_parts")
+    page = Path(__file__).with_name("web_console.html").read_text(encoding="utf-8")
+    replacements = {
+        name: (root / name).read_text(encoding="utf-8")
+        for name in WEB_CONSOLE_FRAGMENTS
+    }
+    # 所有脚本仍处在同一个 script 标签内，跨 Tab 的共享函数无需改变作用域。
+    replacements["scripts"] = "".join(
+        (root / "scripts" / name).read_text(encoding="utf-8")
+        for name in WEB_CONSOLE_SCRIPTS
+    )
+    for name, content in replacements.items():
+        marker = f"@@WEB_CONSOLE:{name}@@"
+        if page.count(marker) != 1:
+            raise RuntimeError(f"工作台页面片段占位符缺失或重复：{name}")
+        page = page.replace(marker, content)
+    if "@@WEB_CONSOLE:" in page:
+        raise RuntimeError("工作台页面存在未配置的片段占位符")
+    return page.encode("utf-8")
 
 
 def excel_download_filename(result: dict[str, Any]) -> str:
@@ -170,6 +221,12 @@ class ConsoleState:
             close_chat_panel_xpath=lambda: self.get_xpath_settings().get("close_chat_panel_xpath", ""),
         )
         self.settings_path = console_config_dir(self.project_root) / "web_console_settings.json"
+        self.comment_reply_workbench = CommentReplyCoordinator(
+            self.browser_session, self.output_root / "reply_tasks",
+            self._check_reply_authorization,
+            console_config_dir(self.project_root) / "comment_reply_xpath.json",
+        )
+        self.reply_presets = ReplyPresetStore(console_config_dir(self.project_root) / "reply_presets.json")
         legacy_settings_path = self.project_root / "web_console_settings.json"
         self.xpath_settings = {
             "pause_xpath": "",
@@ -246,6 +303,7 @@ class ConsoleState:
         if not self.capture_settings_path.exists():
             self.save_capture_settings(self.capture_settings)
         self.capture_presets_path = self.settings_path.with_name("capture_presets.json")
+
         self.capture_presets: dict[str, dict[str, Any]] = {}
         self.selected_capture_preset = ""
         self.default_capture_preset_enabled = True
@@ -266,6 +324,12 @@ class ConsoleState:
         except (OSError, ValueError, TypeError, AttributeError):
             pass
 
+    def _check_reply_authorization(self) -> dict[str, Any]:
+        """Use the same signed-license gate before each comment publication."""
+        if self.capture_authorization is None:
+            raise LicenseError("无法验证授权，不允许执行评论回复")
+        return self.capture_authorization()
+
     @staticmethod
     def _validated_preset_name(value: Any) -> str:
         """校验命名方案名称，返回去空白名称；默认方案使用独立空名称标识。"""
@@ -285,6 +349,19 @@ class ConsoleState:
         """在锁内读取配置列表，包含默认方案是否仍存在。"""
         with self.lock:
             return self._capture_presets_locked()
+
+    def manage_reply_preset(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Keep reply schemes independent of capture schemes and active reply jobs."""
+        if self.comment_reply_workbench.snapshot()["status"] in {"starting", "running"}:
+            raise RuntimeError("回复任务运行期间不能切换或管理配置方案")
+        return self.reply_presets.manage(payload)
+
+    def start_reply(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Start with the applied reply scheme, never with a preview or unsaved draft."""
+        with self.lock:
+            capture_active = self.worker is not None and self.worker.is_alive()
+        active_settings = self.reply_presets.snapshot()["settings"]
+        return self.comment_reply_workbench.start({**payload, **active_settings}, capture_active)
 
     def manage_capture_preset(self, payload: dict[str, Any]) -> dict[str, Any]:
         """处理方案操作，返回方案列表及当前使用参数；编辑其他方案不会切换当前配置。"""
@@ -572,6 +649,10 @@ class ConsoleState:
 
     def start(self, options: dict[str, Any]) -> None:
         """全量校验通过后才入队；失败不保存任务，不启动任何视频采集。"""
+        if self.comment_reply_workbench.snapshot()["status"] in {
+            "starting", "running", "waiting_for_reply", "stopping"
+        }:
+            raise RuntimeError("独立评论回复任务正在运行，请先停止后再启动普通采集")
         rows = parse_share_texts(options.get("share_texts", options.get("urls", [options.get("url", "")])))
         options = {**self.get_capture_settings(), **options}
         self._validated_capture_settings(options)
@@ -602,6 +683,10 @@ class ConsoleState:
 
     def _start_validated(self, options: dict[str, Any], rows: list[dict[str, Any]]) -> None:
         """创建采集队列前重新验证授权，失败不保存配置或启动线程。"""
+        if self.comment_reply_workbench.snapshot()["status"] in {
+            "starting", "running", "waiting_for_reply", "stopping"
+        }:
+            raise RuntimeError("独立评论回复任务正在运行，请先停止后再启动普通采集")
         options = {**self.get_capture_settings(), **options}
         urls = [row["resolved_url"] for row in rows]
         row_by_url = {row["resolved_url"]: row for row in rows}
@@ -891,6 +976,76 @@ class ConsoleState:
             raise FileNotFoundError("结果目录不存在")
         return path
 
+    def resolve_reply_run(self, name: str) -> Path:
+        """Resolve one replies.json directory beneath the dedicated reply output root."""
+        if not name or name in {".", ".."} or Path(name).name != name:
+            raise ValueError("无效的回复结果目录")
+        root = (self.output_root / "reply_tasks").resolve()
+        if (self.output_root / "reply_tasks").is_symlink():
+            raise ValueError("回复结果根目录位置异常")
+        candidate = root / name
+        if candidate.is_symlink() or not candidate.is_dir() or candidate.resolve().parent != root:
+            raise FileNotFoundError("回复结果目录不存在")
+        if (candidate / "replies.json").is_symlink() or not (candidate / "replies.json").is_file():
+            raise ValueError("该目录不是评论回复结果")
+        return candidate
+
+    def read_reply_run(self, name: str) -> dict[str, Any]:
+        """Read only a validated reply result, including matched comments and outcomes."""
+        return json.loads((self.resolve_reply_run(name) / "replies.json").read_text(encoding="utf-8"))
+
+    def list_reply_runs(self) -> list[dict[str, Any]]:
+        """List saved reply tasks without mixing them into capture comments.json."""
+        root = self.output_root / "reply_tasks"
+        if root.is_symlink() or not root.is_dir():
+            return []
+        active = {task["run_name"] for task in self.comment_reply_workbench.snapshot()["tasks"]
+                  if task["run_name"] and task["status"] in
+                  {"starting", "running", "waiting_for_reply", "stopping"}}
+        result = []
+        for directory in sorted(root.iterdir(), reverse=True):
+            if (directory.is_symlink() or not directory.is_dir() or
+                    (directory / "replies.json").is_symlink() or not (directory / "replies.json").is_file()):
+                continue
+            try:
+                data = json.loads((directory / "replies.json").read_text(encoding="utf-8"))
+                matches = data.get("matches", [])
+                result.append({"name": directory.name, "type": "reply", "is_active": directory.name in active,
+                               "status": data.get("status", "unknown"), "source_url": data.get("video_url", ""),
+                               "comment_count": len(matches) if isinstance(matches, list) else 0,
+                               "video_publisher_nickname": "", "video_title": ""})
+            except (OSError, ValueError, TypeError):
+                continue
+        return result
+
+    def delete_reply_run(self, name: str) -> None:
+        """Remove only an inactive validated reply directory selected by the user."""
+        if any(task["run_name"] == name and task["status"] in
+               {"starting", "running", "waiting_for_reply", "stopping"}
+               for task in self.comment_reply_workbench.snapshot()["tasks"]):
+            raise RuntimeError("回复任务仍在运行，不能删除")
+        root = self.output_root / "reply_tasks"
+        if root.is_symlink() or root.resolve().parent != self.output_root.resolve():
+            raise ValueError("回复结果根目录位置异常")
+        shutil.rmtree(self.resolve_reply_run(name))
+
+    def export_reply_runs(self, names: Any) -> bytes:
+        """Build one Excel for selected reply tasks, retaining each task's source ID."""
+        if not isinstance(names, list) or not 1 <= len(names) <= 1000 or any(not isinstance(name, str) for name in names):
+            raise ValueError("请选择有效的回复任务")
+        active = {task["run_name"] for task in self.comment_reply_workbench.snapshot()["tasks"]
+                  if task["status"] in {"starting", "running", "waiting_for_reply", "stopping"}}
+        if any(name in active for name in names):
+            raise RuntimeError("所选回复任务仍在运行，不能导出")
+        rows = []
+        for name in dict.fromkeys(names):
+            data = self.read_reply_run(name)
+            rows.extend({**item, "_run_id": name} for item in data.get("matches", []) if isinstance(item, dict))
+        with TemporaryDirectory(prefix="douyin-reply-export-") as directory:
+            path = Path(directory) / "reply-results.xlsx"
+            export_reply_rows(rows, path)
+            return path.read_bytes()
+
     def _is_run_active_locked(self, name: str) -> bool:
         return any(
             item.get("run_name") == name
@@ -1124,6 +1279,12 @@ class ConsoleServer(ThreadingHTTPServer):
             pass
         finally:
             self.state.private_chat_batch.stop()
+            reply = self.state.comment_reply_workbench.snapshot()
+            if reply["status"] in {"starting", "running"}:
+                try:
+                    self.state.comment_reply_workbench.stop(reply["batch_id"])
+                except RuntimeError:
+                    pass
 
     def server_close(self) -> None:
         """停止监测后释放服务端口，重复关闭不保留后台线程。"""
@@ -1207,6 +1368,18 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/status":
                 self._json(200, self.server.state.snapshot())
                 return
+            if path == "/api/comment-replies":
+                query = parse_qs(parsed.query)
+                offset_text = query.get("offset", ["0"])[0]
+                since_text = query.get("since", ["0"])[0]
+                self._json(200, self.server.state.comment_reply_workbench.snapshot(int(offset_text), int(since_text)))
+                return
+            if path == "/api/comment-replies/xpaths":
+                self._json(200, self.server.state.comment_reply_workbench.get_xpaths())
+                return
+            if path == "/api/comment-replies/presets":
+                self._json(200, self.server.state.reply_presets.snapshot())
+                return
             if path == "/api/settings":
                 self._json(200, self.server.state.get_xpath_settings())
                 return
@@ -1219,7 +1392,20 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/runs":
                 self._json(200, self.server.state.list_runs())
                 return
+            if path == "/api/reply-runs":
+                self._json(200, self.server.state.list_reply_runs())
+                return
             parts = [unquote(part) for part in path.split("/") if part]
+            if len(parts) == 4 and parts[:2] == ["api", "reply-runs"] and parts[3] == "replies":
+                self._json(200, self.server.state.read_reply_run(parts[2]))
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "reply-runs"] and parts[3] == "excel":
+                body = self.server.state.export_reply_runs([parts[2]])
+                filename = f"{parts[2]}-评论回复.xlsx"
+                self._send_bytes(200, body, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                 'attachment; filename="replies.xlsx"; '
+                                 + f"filename*=UTF-8''{quote(filename, safe='')}")
+                return
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "comments":
                 run = self.server.state.resolve_run(parts[2])
                 body = json.dumps(
@@ -1292,6 +1478,31 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
             if self.path == "/api/private-chat/open":
                 self._json(200, {"ok": True, **self.server.state.open_private_chat(self._read_json())})
                 return
+            if self.path.startswith("/api/comment-replies/"):
+                origin = self.headers.get("Origin")
+                if origin and (urlparse(origin).scheme not in {"http", "https"}
+                               or urlparse(origin).netloc != self.headers.get("Host")):
+                    raise ValueError("不允许跨站操作评论回复")
+                payload = self._read_json()
+                reply = self.server.state.comment_reply_workbench
+                if self.path == "/api/comment-replies/xpaths":
+                    self._json(200, {"ok": True, "xpaths": reply.save_xpaths(payload)})
+                    return
+                if self.path == "/api/comment-replies/start":
+                    self._json(202, {"ok": True, **self.server.state.start_reply(payload)})
+                    return
+                if self.path == "/api/comment-replies/stop":
+                    reply.stop(str(payload.get("job_id", "")))
+                    self._json(200, {"ok": True})
+                    return
+                if self.path in {"/api/comment-replies/submit", "/api/comment-replies/skip"}:
+                    reply.manual_reply(str(payload.get("job_id", "")), str(payload.get("comment_id", "")),
+                                       str(payload.get("text", "")), skip=self.path.endswith("/skip"))
+                    self._json(200, {"ok": True})
+                    return
+                if self.path == "/api/comment-replies/presets":
+                    self._json(200, {"ok": True, **self.server.state.manage_reply_preset(payload)})
+                    return
             if self.path == "/api/private-chat/send":
                 # 浏览器跨站请求不能使用本机发送接口；只允许控制台同源调用。
                 origin = self.headers.get("Origin")
@@ -1305,6 +1516,17 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
                 filename = f"评论合并导出-{datetime.now().strftime('%Y%m%d-%H%M%S')}.xlsx"
                 self._send_bytes(200, body, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                  'attachment; filename="merged.xlsx"; ' + f"filename*=UTF-8''{quote(filename, safe='')}")
+                return
+            if self.path == "/api/reply-runs/export-merged":
+                body = self.server.state.export_reply_runs(self._read_json().get("names"))
+                filename = f"评论回复合并导出-{datetime.now().strftime('%Y%m%d-%H%M%S')}.xlsx"
+                self._send_bytes(200, body, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                 'attachment; filename="replies.xlsx"; '
+                                 + f"filename*=UTF-8''{quote(filename, safe='')}")
+                return
+            if self.path == "/api/reply-runs/delete":
+                self.server.state.delete_reply_run(str(self._read_json().get("name", "")))
+                self._json(200, {"ok": True})
                 return
             if self.path == "/api/crawl/start":
                 options = self._read_json()
@@ -1473,6 +1695,11 @@ def _run_workbench(args: Any, instance: Any = None, manager: LicenseManager | No
             # 退出不是页面的停止按钮；空闲和任务刚结束都是正常状态。
             server.state.stop(require_running=False)
             server.state.private_chat_batch.stop()
+            reply = server.state.comment_reply_workbench.snapshot()
+            if reply["status"] in {"starting", "running"}:
+                server.state.comment_reply_workbench.stop(reply["batch_id"])
+            if server.state.comment_reply_workbench.worker is not None:
+                server.state.comment_reply_workbench.worker.join(timeout=5)
             if server.state.private_chat_batch.worker is not None:
                 server.state.private_chat_batch.worker.join(timeout=5)
             if server.state.worker is not None:

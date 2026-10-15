@@ -1,0 +1,63 @@
+<div id="deleteDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle"
+             aria-describedby="dialogDescription">
+        <div class="dialog-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 6h18M8 6V4h8v2m3 0-.8 14H5.8L5 6m4 4v6m6-6v6"/>
+            </svg>
+        </div>
+        <h2 id="dialogTitle">删除这次采集结果？</h2>
+        <p id="dialogDescription">此操作会永久移除该目录里的评论数据、图片和导出文件。</p>
+        <p id="dialogError" class="dialog-error" hidden></p>
+        <div id="dialogRunName" class="dialog-name"></div>
+        <div class="dialog-actions">
+            <button id="cancelDelete" class="btn" type="button">取消</button>
+            <button id="confirmDelete" class="btn danger" type="button">删除结果</button>
+        </div>
+    </section>
+</div>
+<div id="chatDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="chatTitle" aria-describedby="chatHelp">
+        <h2 id="chatTitle">私聊用户</h2>
+        <p id="chatIdentity"></p>
+        <div class="field"><label for="chatDraft">私信内容</label><textarea id="chatDraft" rows="4" maxlength="1000"
+                                                                            placeholder="填写内容后直接点击发送私信"></textarea>
+        </div>
+        <p id="chatHelp" class="chat-status">
+            仅使用你自己的登录账号。点击“发送私信”会自动打开并核对目标会话，再提交一条消息；不自动重试。也可只打开抖音私信，人工查看。是否可私信取决于对方设置。</p>
+        <div id="chatLoading" class="chat-loading" role="status" aria-live="polite" hidden><span
+                class="chat-loading-spinner" aria-hidden="true"></span>
+            <div><strong id="chatLoadingTitle"></strong><span id="chatLoadingHint">请查看另一个浏览器窗口。</span></div>
+        </div>
+        <p id="chatStatus" class="chat-status" role="status" aria-live="polite"></p>
+        <div class="dialog-actions">
+            <button id="closeChat" type="button" class="btn">关闭</button>
+            <button id="openChatPage" type="button" class="btn">打开抖音私信</button>
+            <button id="sendChatMessage" type="button" class="btn primary" disabled>发送私信</button>
+        </div>
+    </section>
+</div>
+<div id="bulkChatDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="bulkChatTitle">
+        <h2 id="bulkChatTitle">批量私信</h2>
+        <p>向下列用户发送相同文本，同一用户只发送一次。逐个处理。平台验证和私信权限限制仍然有效，请勿发送骚扰或垃圾信息。</p>
+        <div id="bulkChatRecipients"></div>
+        <div id="bulkChatCompose"><label for="bulkChatDraft">统一私信内容</label><textarea id="bulkChatDraft"
+                                                                                           maxlength="1000" rows="4"
+                                                                                           placeholder="输入发送给以上所有用户的相同内容"></textarea>
+        </div>
+        <div id="bulkChatLoading" class="chat-loading" role="status" aria-live="polite" hidden><span
+                class="chat-loading-spinner" aria-hidden="true"></span>
+            <div><strong
+                    id="bulkChatLoadingTitle">正在处理批量私信</strong><span>请查看另一个浏览器窗口，按需完成登录或验证。</span>
+            </div>
+        </div>
+        <p id="bulkChatStatus" class="chat-status" role="status" aria-live="polite"></p>
+        <div class="dialog-actions">
+            <button id="closeBulkChat" class="btn" type="button">关闭</button>
+            <button id="stopBulkChat" class="btn danger" type="button" hidden>停止后续发送</button>
+            <button id="startBulkChat" class="btn primary" type="button" disabled>批量发送</button>
+        </div>
+    </section>
+</div>

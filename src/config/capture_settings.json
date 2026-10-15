@@ -1,5 +1,5 @@
 {
-  "comment_scope": "top_level",
+  "comment_scope": "all",
   "fetch_mode": "network_first",
   "max_comments": 0,
   "max_minutes": 30,
