@@ -14,11 +14,11 @@ except ImportError:
 
 
 DEFAULT_REPLY_SETTINGS = {"region": "", "keywords": [], "source_mode": "page_first",
-                          "max_minutes": 30}
+                          "mode": "manual", "reply_text": "", "max_minutes": 30}
 
 
 def validate_reply_settings(payload: Any) -> dict[str, Any]:
-    """Normalize only task-wide options; video mode and draft belong to video rows."""
+    """Normalize only task-wide options; reply mode and draft apply to the whole batch."""
     if not isinstance(payload, dict):
         raise ValueError("回复配置必须是 JSON 对象")
     region = payload.get("region", "")
@@ -32,11 +32,23 @@ def validate_reply_settings(payload: Any) -> dict[str, Any]:
     source_mode = payload.get("source_mode", "page_first")
     if source_mode != "page_first":
         raise ValueError("接口优先尚未开放；请选择页面元素优先")
+    mode = payload.get("mode", "manual")
+    if mode not in {"manual", "automatic"}:
+        raise ValueError("回复方式无效")
+    reply_text = payload.get("reply_text", "")
+    if not isinstance(reply_text, str):
+        raise ValueError("预设回复文字须为文字")
+    reply_text = reply_text.strip()
+    if len(reply_text) > 500:
+        raise ValueError("预设回复文字不能超过 500 个字符")
+    # 与启动校验一致：自动回复没有文案时不能保存为方案。
+    if mode == "automatic" and not reply_text:
+        raise ValueError("预设文字自动回复需要先填写回复内容")
     max_minutes = payload.get("max_minutes", 30)
     if type(max_minutes) is not int or not 1 <= max_minutes <= 240:
         raise ValueError("运行时长须为 1 至 240 分钟")
     return {"region": region, "keywords": keywords, "source_mode": source_mode,
-            "max_minutes": max_minutes}
+            "mode": mode, "reply_text": reply_text, "max_minutes": max_minutes}
 
 
 class ReplyPresetStore:

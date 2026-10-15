@@ -2,7 +2,7 @@
         <div class="reply-layout">
             <div class="card reply-settings">
                 <h2>评论回复配置</h2>
-                <p>粘贴完整分享文本；每个视频单独设置回复方式和预设文字，最多同时处理 2 个视频，其余排队。</p>
+                <p>粘贴完整分享文本；回复方式、预设文字、地区和关键词对整批生效，最多同时处理 2 个视频，其余排队。</p>
                 <div id="replyVideos"></div>
                 <div class="actions">
                     <button id="startReply" type="button" class="btn primary">启动回复任务</button>
@@ -25,7 +25,7 @@
                                 <tbody id="replyPresetRows"></tbody>
                             </table>
                         </div>
-                        <small id="replyPresetHint">查看不会改变当前使用配置；方案不包含分享文本及逐视频文案。</small>
+                        <small id="replyPresetHint">查看不会改变当前使用配置；方案不包含视频分享文本。</small>
                     </div>
                     <div class="preset-detail-header"><strong id="replyPresetDetailTitle">当前使用配置</strong>
                         <div class="actions">
@@ -34,11 +34,14 @@
                             <button id="cancelReplyPresetEdit" type="button" class="btn" hidden>取消编辑</button>
                         </div>
                     </div>
-                    <div class="field"><label for="replyRegion">IP 属地</label><input id="replyRegion"
-                                                                                      list="replyRegions"
-                                                                                      autocomplete="off"
-                                                                                      placeholder="输入省级地区并从列表选择">
-                        <datalist id="replyRegions"></datalist>
+                    <div class="field"><label for="replyRegion">IP 属地</label>
+                        <div id="replyRegionCombo" class="combo">
+                            <input id="replyRegion" autocomplete="off" role="combobox" aria-expanded="false"
+                                   aria-controls="replyRegionOptions" aria-autocomplete="list"
+                                   placeholder="输入省级地区并从列表选择">
+                            <ul id="replyRegionOptions" class="combo-list" role="listbox" aria-label="省级地区"
+                                hidden></ul>
+                        </div>
                         <small>按评论接口返回的 IP 属地匹配，不推断城市或实际位置。</small></div>
                     <div class="field"><label for="replyKeyword">评论关键词</label>
                         <div class="reply-keyword-entry"><input id="replyKeyword" maxlength="100"
@@ -47,10 +50,21 @@
                         </div>
                         <div id="replyKeywords" class="reply-keywords"></div>
                         <small>多个关键词满足任意一个即可；若选择了地区，还须同时满足地区。</small></div>
-                    <div class="field"><label for="replySourceMode">评论加载方式</label><select id="replySourceMode">
-                        <option value="page_first">页面元素优先（滚动加载）</option>
-                        <option value="interface_first" disabled>接口优先（暂未开放）</option>
-                    </select></div>
+                    <div class="row">
+                        <div class="field"><label for="replySourceMode">评论加载方式</label><select
+                                id="replySourceMode">
+                            <option value="page_first">页面元素优先（滚动加载）</option>
+                            <option value="interface_first" disabled>接口优先（暂未开放）</option>
+                        </select><small>当前只开放页面滚动加载</small></div>
+                        <div class="field"><label for="replyMode">回复方式</label><select id="replyMode">
+                            <option value="manual">实时逐条确认</option>
+                            <option value="automatic">预设文字自动回复</option>
+                        </select><small>整批命中评论使用同一种方式</small></div>
+                    </div>
+                    <div class="field" id="replyDraftField" hidden><label for="replyPresetText">预设回复文字</label>
+                        <textarea id="replyPresetText" rows="3" maxlength="500"
+                                  placeholder="所有命中评论都使用这段文字回复"></textarea>
+                        <small>选择“预设文字自动回复”后必填，最多 500 字；结果不确定的评论不会自动重试。</small></div>
                     <div class="field"><label for="replyMaxMinutes">最长运行时间（分钟）</label><input
                             id="replyMaxMinutes" type="number" min="1" max="240" value="30"></div>
                 </div>

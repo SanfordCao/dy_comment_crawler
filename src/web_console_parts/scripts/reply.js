@@ -6,7 +6,7 @@
     let activeReplySettings = {}, replyPresetDeleteTarget = null;
     const replyLogCards = new Map();
 
-    /** 创建与采集页相同的分享文本输入行，模式和文案仍属于对应视频。 */
+    /** 创建与采集页相同的分享文本输入行；回复方式和文案由整批公共设置决定。 */
     function addReplyVideo(data = {}) {
         if ($('replyVideos').children.length >= 100) {
             showNotice('最多添加 100 个视频链接', true);
@@ -52,37 +52,9 @@
             checkDuplicateReplyVideos(share);
         };
         linkRow.append(share, remove, add);
-        const mode = document.createElement('div');
-        mode.className = 'reply-mode';
-        mode.setAttribute('role', 'group');
-        mode.setAttribute('aria-label', '回复模式');
-        const group = `reply-mode-${crypto.randomUUID()}`;
-        for (const [value, text] of [['manual', '实时逐条确认'], ['automatic', '预设文字自动回复']]) {
-            const option = document.createElement('label'), radio = document.createElement('input');
-            radio.type = 'radio';
-            radio.name = group;
-            radio.value = value;
-            radio.checked = (data.mode || 'manual') === value;
-            option.append(radio, document.createTextNode(text));
-            mode.append(option);
-        }
-        const draftField = document.createElement('div');
-        draftField.className = 'field';
-        const draftLabel = document.createElement('label');
-        draftLabel.textContent = '预设回复文字';
-        const draft = document.createElement('textarea');
-        draft.rows = 3;
-        draft.maxLength = 500;
-        draft.value = data.reply_text || '';
-        draftField.append(draftLabel, draft);
-        const syncMode = () => {
-            draftField.hidden = mode.querySelector('input:checked').value !== 'automatic';
-        };
-        mode.addEventListener('change', syncMode);
-        syncMode();
-        root.append(head, linkRow, mode, draftField);
+        root.append(head, linkRow);
         $('replyVideos').append(root);
-        root.replyFields = {title, linkRow, remove, add, share, mode, draft};
+        root.replyFields = {title, linkRow, remove, add, share};
         syncReplyVideoRows();
         return root;
     }
@@ -122,16 +94,15 @@
         return duplicates.length > 0;
     }
 
-    /** 只读取视频卡配置，不把预设文字错误地套到其他视频。 */
+    /** 只读取视频卡里的分享文本；回复方式和文案来自当前应用方案，预览草稿不能生效。 */
     function replyVideoPayload() {
-        return [...$('replyVideos').children].map(row => {
-            const fields = row.replyFields;
-            return {
-                share_text: fields.share.value,
-                mode: fields.mode.querySelector('input:checked').value,
-                reply_text: fields.draft.value
-            };
-        });
+        const mode = activeReplySettings.mode === 'automatic' ? 'automatic' : 'manual';
+        const replyText = typeof activeReplySettings.reply_text === 'string' ? activeReplySettings.reply_text.trim() : '';
+        return [...$('replyVideos').children].map(row => ({
+            share_text: row.replyFields.share.value,
+            mode,
+            reply_text: replyText
+        }));
     }
 
     /** 关键词以去重列表展示，输入框内容不作为尚未确认的筛选条件。 */
@@ -170,6 +141,110 @@
     }
 
     $('addReplyKeyword').onclick = addReplyKeyword;
+
+    let replyRegions = [], replyRegionOpen = false, replyRegionActive = 0;
+
+    /** 与后端同一规则：去掉行政区后缀，输入“广东省”也能匹配候选“广东”。 */
+    function regionKey(value) {
+        const label = String(value || '').replace(/\s+/g, '');
+        for (const suffix of ['特别行政区', '维吾尔自治区', '壮族自治区', '回族自治区', '自治区', '省', '市']) {
+            if (label.endsWith(suffix)) return label.slice(0, -suffix.length);
+        }
+        return label;
+    }
+
+    /**
+     * 原生 datalist 弹层由浏览器绘制，无法用页面样式覆盖（深色系统下固定黑底），
+     * 所以候选列表改为自绘：输入即过滤、↑↓ 移动、回车确认、Esc 或点外部关闭。
+     */
+    function closeReplyRegionList() {
+        replyRegionOpen = false;
+        $('replyRegionOptions').hidden = true;
+        $('replyRegion').setAttribute('aria-expanded', 'false');
+        $('replyRegion').removeAttribute('aria-activedescendant');
+    }
+
+    /** 未输入或输入已是完整地区时列出全部候选（便于改选），输入不完整时按前缀过滤。 */
+    function renderReplyRegionOptions() {
+        const box = $('replyRegionOptions'), value = regionKey($('replyRegion').value);
+        const term = replyRegions.includes(value) ? '' : value;
+        const options = (term ? [] : [{value: '', label: '不限地区'}])
+            .concat(replyRegions.filter(region => region.startsWith(term))
+                .map(region => ({value: region, label: region})));
+        box.replaceChildren();
+        for (const option of options) {
+            const item = document.createElement('li'), current = option.value && option.value === value;
+            item.id = `replyRegionOption-${box.children.length}`;
+            item.dataset.value = option.value;
+            item.setAttribute('role', 'option');
+            item.setAttribute('aria-selected', String(Boolean(current)));
+            item.textContent = option.label;
+            if (current) {
+                const check = document.createElement('span');
+                check.className = 'combo-check';
+                check.textContent = '✓';
+                item.classList.add('is-current');
+                item.append(check);
+            }
+            item.onclick = () => pickReplyRegion(option.value);
+            box.append(item);
+        }
+        return box.children.length;
+    }
+
+    /** 高亮项同时写入 aria-activedescendant，键盘与读屏使用同一状态。 */
+    function setReplyRegionActive(index) {
+        const items = [...$('replyRegionOptions').children];
+        if (!items.length) return;
+        replyRegionActive = (index + items.length) % items.length;
+        items.forEach((item, position) => item.classList.toggle('is-active', position === replyRegionActive));
+        $('replyRegion').setAttribute('aria-activedescendant', items[replyRegionActive].id);
+        items[replyRegionActive].scrollIntoView({block: 'nearest'});
+    }
+
+    function openReplyRegionList() {
+        const input = $('replyRegion');
+        if (input.disabled) return;
+        if (!renderReplyRegionOptions()) return closeReplyRegionList();
+        replyRegionOpen = true;
+        $('replyRegionOptions').hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+        const selected = [...$('replyRegionOptions').children].findIndex(item => item.classList.contains('is-current'));
+        setReplyRegionActive(selected === -1 ? 0 : selected);
+    }
+
+    /** 选中只写回输入框内容，地区合法性仍由后端校验。 */
+    function pickReplyRegion(value) {
+        $('replyRegion').value = value;
+        closeReplyRegionList();
+        $('replyRegion').focus();
+    }
+
+    $('replyRegion').oninput = openReplyRegionList;
+    $('replyRegion').onclick = event => {
+        const input = event.currentTarget, box = input.getBoundingClientRect();
+        // 右侧箭头是开合开关（热区与样式表 padding-right: 40px 一致）；其余区域用于继续输入。
+        if (replyRegionOpen && event.clientX - box.left >= box.width - 40) return closeReplyRegionList();
+        openReplyRegionList();
+    };
+    $('replyRegion').onkeydown = event => {
+        if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
+            event.preventDefault();
+            if (!replyRegionOpen) return openReplyRegionList();
+            setReplyRegionActive(replyRegionActive + (event.key === 'ArrowDown' ? 1 : -1));
+        } else if (event.key === 'Enter' && replyRegionOpen) {
+            event.preventDefault();
+            const item = $('replyRegionOptions').children[replyRegionActive];
+            if (item) pickReplyRegion(item.dataset.value);
+        } else if (event.key === 'Escape' && replyRegionOpen) {
+            closeReplyRegionList();
+        } else if (event.key === 'Tab') {
+            closeReplyRegionList();
+        }
+    };
+    document.addEventListener('click', event => {
+        if (!$('replyRegionCombo').contains(event.target)) closeReplyRegionList();
+    });
     $('replyKeyword').onkeydown = event => {
         if (event.key === 'Enter') {
             event.preventDefault();
@@ -183,20 +258,33 @@
             region: $('replyRegion').value.trim(),
             keywords: [...replyKeywords],
             source_mode: $('replySourceMode').value,
+            mode: $('replyMode').value,
+            reply_text: $('replyPresetText').value.trim(),
             max_minutes: Number($('replyMaxMinutes').value)
         };
     }
 
-    /** 回显某个方案，始终不改变分享文本或逐视频回复方式。 */
+    /** 回显某个方案，始终不改变各视频的分享文本。 */
     function applyReplySettings(settings) {
+        closeReplyRegionList();
         $('replyRegion').value = settings.region || '';
         replyKeywords = [...(settings.keywords || [])];
         renderReplyKeywords();
         $('replyKeyword').value = '';
         $('replySourceMode').value = settings.source_mode || 'page_first';
+        $('replyMode').value = settings.mode === 'automatic' ? 'automatic' : 'manual';
+        $('replyPresetText').value = settings.reply_text || '';
+        syncReplyDraftField();
         $('replyMaxMinutes').value = settings.max_minutes || 30;
         centerSelectArrows();
     }
+
+    /** 只有“预设文字自动回复”需要文案，与服务端校验保持一致。 */
+    function syncReplyDraftField() {
+        $('replyDraftField').hidden = $('replyMode').value !== 'automatic';
+    }
+
+    $('replyMode').onchange = syncReplyDraftField;
 
     /** 查看只读、编辑解锁；回复任务运行时所有方案修改保持禁用。 */
     function syncReplyPresetControls() {
@@ -205,7 +293,9 @@
         $('replyPresetManager').querySelectorAll('button').forEach(button => {
             button.disabled = replyPresetBusy || (replyRunning && button.dataset.replyPresetView !== 'true') || button.dataset.permanentlyDisabled === 'true';
         });
-        for (const id of ['replyRegion', 'replyKeyword', 'addReplyKeyword', 'replyMaxMinutes', 'replySourceMode']) $(id).disabled = disabled || !replyEditing;
+        for (const id of ['replyRegion', 'replyKeyword', 'addReplyKeyword', 'replyMaxMinutes', 'replySourceMode', 'replyMode', 'replyPresetText']) $(id).disabled = disabled || !replyEditing;
+        // 查看态或运行中禁用地区输入框时，已展开的候选列表不能留在页面上。
+        if ($('replyRegion').disabled) closeReplyRegionList();
         $('replyKeywords').querySelectorAll('button').forEach(button => button.disabled = disabled || !replyEditing);
         $('saveReplyPreset').hidden = !replyCreating;
         $('updateReplyPreset').hidden = !replyEditing || replyCreating;
@@ -427,13 +517,7 @@
     /** 载入运行中的多视频配置与独立 XPath；刷新不重新启动或发送。 */
     async function loadReplySettings() {
         const state = await api('/api/comment-replies'), xpaths = await api('/api/comment-replies/xpaths');
-        const options = $('replyRegions');
-        options.replaceChildren();
-        for (const region of state.regions) {
-            const option = document.createElement('option');
-            option.value = region;
-            options.append(option);
-        }
+        replyRegions = [...state.regions];
         replyRunning = ['starting', 'running'].includes(state.status);
         $('replyVideos').replaceChildren();
         if (state.tasks.length) state.tasks.forEach(task => addReplyVideo(task)); else addReplyVideo();

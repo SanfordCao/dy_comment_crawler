@@ -5,12 +5,16 @@
     "region": "",
     "keywords": [],
     "source_mode": "page_first",
+    "mode": "manual",
+    "reply_text": "",
     "max_minutes": 30
   },
   "default_settings": {
     "region": "",
     "keywords": [],
     "source_mode": "page_first",
+    "mode": "manual",
+    "reply_text": "",
     "max_minutes": 30
   },
   "presets": []
