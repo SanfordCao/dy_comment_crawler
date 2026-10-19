@@ -2348,37 +2348,6 @@ select {
     line-height: 1
 }
 
-.reply-log-card {
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    overflow: hidden;
-    margin-top: 12px
-}
-
-.reply-log-head {
-    padding: 12px 14px;
-    background: #eff5f1;
-    display: flex;
-    justify-content: space-between;
-    gap: 8px
-}
-
-.reply-log-body {
-    height: 220px;
-    overflow: auto;
-    background: #14231d;
-    color: #c6dfd2;
-    padding: 12px;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    font: 12px/1.65 ui-monospace, monospace
-}
-
-.reply-log-empty {
-    padding: 22px;
-    color: var(--muted)
-}
-
 .reply-note {
     margin: 16px 0;
     padding: 12px 14px;

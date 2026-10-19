@@ -1,3 +1,14 @@
+    /** 更新一个日志框，阅读旧日志时保持位置，位于底部时才跟随新增日志。 */
+    function updateLogBox(box, logs, placeholder = "暂无运行日志") {
+        const text = logs.length ? logs.join("\n") : placeholder;
+        if (box.textContent === text) return;
+        // Check before adding new lines, so an existing reader position is kept.
+        const followLatest = box.scrollHeight - box.clientHeight - box.scrollTop <= 24;
+        const previousTop = box.scrollTop;
+        box.textContent = text;
+        box.scrollTop = followLatest ? box.scrollHeight : previousTop;
+    }
+
     /** 切换高级配置分类，仅切换显示，不重建表单，保留尚未保存的 XPath。 */
     function selectConfigCategory(button) {
         document.querySelectorAll(".config-category").forEach(tab => {

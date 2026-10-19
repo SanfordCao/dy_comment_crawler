@@ -286,17 +286,6 @@
         return logs
     }
 
-    /** 更新一个日志框，阅读旧日志时保持位置，位于底部时才跟随新增日志。 */
-    function updateLogBox(box, logs, placeholder = "暂无运行日志") {
-        const text = logs.length ? logs.join("\n") : placeholder;
-        if (box.textContent === text) return;
-        // Check before adding new lines, so an existing reader position is kept.
-        const followLatest = box.scrollHeight - box.clientHeight - box.scrollTop <= 24;
-        const previousTop = box.scrollTop;
-        box.textContent = text;
-        box.scrollTop = followLatest ? box.scrollHeight : previousTop;
-    }
-
     const taskLogCards = new Map();
 
     /** 按稳定任务键更新日志卡片，保留每个任务自己的滚动位置。 */

@@ -543,35 +543,38 @@
             box.replaceChildren();
             replyLogCards.clear();
             const empty = document.createElement('div');
-            empty.className = 'reply-log-empty';
+            empty.className = 'log-empty';
             empty.textContent = '暂无回复任务，启动后按视频分别显示日志。';
             box.append(empty);
             return;
         }
-        box.querySelector('.reply-log-empty')?.remove();
-        for (const task of tasks) {
+        box.querySelector('.log-empty')?.remove();
+        const labels = {pending: '等待回复', running: '回复中', waiting_for_reply: '等待确认',
+            stopping: '正在停止', complete: '已完成', failed: '失败', stopped: '已停止', interrupted: '已中断'};
+        for (const [index, task] of tasks.entries()) {
             let card = replyLogCards.get(task.job_id);
             if (!card) {
                 const root = document.createElement('section'), head = document.createElement('div'),
                     name = document.createElement('strong'), status = document.createElement('span'),
-                    body = document.createElement('div');
-                root.className = 'reply-log-card';
-                head.className = 'reply-log-head';
-                body.className = 'reply-log-body';
+                    url = document.createElement('div'), body = document.createElement('div');
+                root.className = 'task-log-card';
+                head.className = 'task-log-header';
+                status.className = 'task-log-state';
+                url.className = 'task-log-url';
+                body.className = 'task-log-body';
                 head.append(name, status);
-                root.append(head, body);
+                root.append(head, url, body);
                 box.append(root);
-                card = {root, name, status, body};
+                card = {root, name, status, url, body};
                 replyLogCards.set(task.job_id, card);
             }
-            card.name.textContent = task.run_name || task.video_url || task.job_id;
-            card.status.textContent = `${task.message} · 命中 ${task.total} 条`;
-            const next = (task.logs || []).join('\n') || task.message;
-            if (card.body.textContent !== next) {
-                const atBottom = card.body.scrollTop + card.body.clientHeight >= card.body.scrollHeight - 20;
-                card.body.textContent = next;
-                if (atBottom) card.body.scrollTop = card.body.scrollHeight;
-            }
+            card.name.textContent = `视频 ${index + 1}`;
+            card.status.textContent = `${labels[task.status] || task.status} · 命中 ${task.total ?? 0} 条`;
+            card.url.textContent = task.video_url || task.run_name || task.job_id;
+            const logs = task.logs || [];
+            card.body.dataset.empty = String(!logs.length);
+            // 复用采集页的底部跟随逻辑，翻看旧日志时保持各自滚动位置。
+            updateLogBox(card.body, logs, task.message || '暂无日志');
         }
         for (const [id, card] of replyLogCards) if (!tasks.some(task => task.job_id === id)) {
             card.root.remove();
