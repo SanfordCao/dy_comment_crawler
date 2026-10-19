@@ -305,6 +305,21 @@ class CommentReplyWorkbench:
             self._log_locked(message)
             self._save_locked()
 
+    def _completion_message(self, reason: str) -> str:
+        """Treat zero matches as a normal completion instead of a failure."""
+        if not self.items:
+            return f"{reason}，未匹配到符合条件的评论，任务完成"
+        return f"{reason}，回复任务完成"
+
+    def _log_cleanup_warning(self, action: str, error: BaseException) -> None:
+        """Keep cleanup-only failures from overwriting an already finished result."""
+        try:
+            with self.lock:
+                self._log_locked(f"{action}时出现清理异常，已忽略：{type(error).__name__}")
+        except Exception:
+            # Logging must never break the task's final state; the reply outcome is kept.
+            pass
+
     def _run_worker(self, xpaths: dict[str, str]) -> None:
         """Keep browser operations on its dedicated event loop and preserve failures."""
         try:
@@ -339,7 +354,7 @@ class CommentReplyWorkbench:
             self._set_status("running", "正在滚动评论区并筛选")
             while not self.stop_event.is_set():
                 if asyncio.get_running_loop().time() - started >= self.settings["max_minutes"] * 60:
-                    self._set_status("complete", "达到设定运行时长")
+                    self._set_status("complete", self._completion_message("达到设定运行时长"))
                     break
                 await collector.drain()
                 discovered = await self._scan_visible(page, store, xpaths)
@@ -364,10 +379,13 @@ class CommentReplyWorkbench:
                         raise RuntimeError("未捕获到评论列表响应，不能认定评论已加载完整")
                     if response_state.has_more is True:
                         raise RuntimeError("评论接口仍显示还有更多，但页面已无法继续滚动；结果不完整")
-                    self._set_status("complete", "评论区连续多轮无新增，回复任务完成")
+                    self._set_status("complete", self._completion_message("评论区连续多轮无新增"))
                     break
-            collector.detach()
-            await collector.drain()
+            try:
+                collector.detach()
+                await collector.drain()
+            except Exception as error:
+                self._log_cleanup_warning("停止评论响应监听", error)
             if self.stop_event.is_set():
                 self._set_status("stopped", "回复任务已停止")
             with self.lock:
@@ -380,19 +398,26 @@ class CommentReplyWorkbench:
                         item["revision"] = self.revision
                 self._save_locked()
         finally:
+            # 清理阶段任何失败都只写日志：任务状态已由正常流程确定，不能被覆盖。
             try:
                 collector.detach()
                 await collector.drain()
-            finally:
-                try:
-                    # Give already received bodies a bounded chance to finish, even on failure.
-                    if metadata_collector.pending:
-                        await asyncio.wait(tuple(metadata_collector.pending), timeout=1)
-                finally:
-                    try:
-                        await metadata_collector.close()
-                    finally:
-                        await page.close()
+            except Exception as error:
+                self._log_cleanup_warning("停止评论响应监听", error)
+            try:
+                # Give already received bodies a bounded chance to finish, even on failure.
+                if metadata_collector.pending:
+                    await asyncio.wait(tuple(metadata_collector.pending), timeout=1)
+            except Exception as error:
+                self._log_cleanup_warning("等待视频信息响应", error)
+            try:
+                await metadata_collector.close()
+            except Exception as error:
+                self._log_cleanup_warning("停止视频信息监听", error)
+            try:
+                await page.close()
+            except Exception as error:
+                self._log_cleanup_warning("关闭回复页面", error)
 
     async def _scan_visible(self, page: Any, store: CommentStore,
                             xpaths: dict[str, str]) -> int:
@@ -567,7 +592,11 @@ class CommentReplyWorkbench:
                 raise RuntimeError("接口未返回新评论 ID，无法确认发布结果；不会重试")
             self._update_item(cid, "sent", reply_text=text)
         finally:
-            page.remove_listener("response", on_response)
+            try:
+                page.remove_listener("response", on_response)
+            except KeyError:
+                # pyee 以包装后的回调作为键；重复移除会抛 KeyError，不能覆盖发布结果。
+                pass
             response_future.cancel()
 
     @staticmethod

@@ -201,13 +201,27 @@ class CommentResponseCollector:
         self.include_all_levels = include_all_levels
         self.pending: set[asyncio.Task[None]] = set()
         self._listener = self._schedule
+        self._attached = False
         self._log_context = copy_context()
 
     def attach(self) -> None:
+        """Register once so repeated setup cannot duplicate response processing."""
+        if self._attached:
+            return
         self.page.on("response", self._listener)
+        self._attached = True
 
     def detach(self) -> None:
-        self.page.remove_listener("response", self._listener)
+        """Release once; normal completion and finally may both request cleanup."""
+        if not self._attached:
+            return
+        # Playwright/pyee raises KeyError when the same wrapped callback is removed
+        # twice; its text is a function repr, so never let cleanup fail a finished task.
+        self._attached = False
+        try:
+            self.page.remove_listener("response", self._listener)
+        except KeyError:
+            pass
 
     def _schedule(self, response: Response) -> None:
         response_url = response.url

@@ -4,26 +4,26 @@
   "settings": {
     "region": "",
     "keywords": [
-      "天津话"
+      "子agent"
     ],
     "source_mode": "page_first",
     "mode": "manual",
     "reply_text": "",
     "max_minutes": 30,
-    "concurrent": false,
-    "concurrency_limit": 2
+    "concurrent": true,
+    "concurrency_limit": 10
   },
   "default_settings": {
     "region": "",
     "keywords": [
-      "天津话"
+      "子agent"
     ],
     "source_mode": "page_first",
     "mode": "manual",
     "reply_text": "",
     "max_minutes": 30,
-    "concurrent": false,
-    "concurrency_limit": 2
+    "concurrent": true,
+    "concurrency_limit": 10
   },
   "presets": []
 }

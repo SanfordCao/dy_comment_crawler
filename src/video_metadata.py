@@ -60,10 +60,14 @@ class VideoMetadataCollector:
         self.pending: set[asyncio.Task] = set()
         self._log_context = copy_context()
         self._listener = self._schedule
+        self._attached = False
 
     def attach(self) -> None:
         """导航前注册，避免遗漏打开视频时立即返回的详情响应。"""
+        if self._attached:
+            return
         self.page.on("response", self._listener)
+        self._attached = True
         for prefix, label in (("author", "作者昵称"), ("title", "视频标题")):
             print(f"[视频接口配置] {label}：接口={self.settings[prefix + '_api_path'] or '未配置'}；"
                   f"JSON路径={self.settings[prefix + '_json_path'] or '未配置'}")
@@ -133,7 +137,14 @@ class VideoMetadataCollector:
 
     async def close(self) -> None:
         """移除监听并取消未完成解析，确保页面关闭后不再修改任务结果。"""
-        self.page.remove_listener("response", self._listener)
+        # 正常结束与 finally 都可能要求清理；重复移除在 Playwright/pyee 中会抛
+        # KeyError（其文本是被包装回调和函数地址），不能让它覆盖已完成结果。
+        if self._attached:
+            self._attached = False
+            try:
+                self.page.remove_listener("response", self._listener)
+            except KeyError:
+                pass
         tasks = tuple(self.pending)
         for task in tasks:
             task.cancel()
