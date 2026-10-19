@@ -5,6 +5,17 @@
         replyEditing = false, replyCreating = false;
     let activeReplySettings = {}, replyPresetDeleteTarget = null;
     const replyLogCards = new Map();
+    let replyInitialBatchChecked = false, replyHiddenBatchId = '';
+
+    /** 刷新只恢复仍在运行的批次；记住旧批次，防止后续轮询重新填回完成记录。 */
+    function visibleReplyTasks(state) {
+        const active = ['starting', 'running'].includes(state.status);
+        if (!replyInitialBatchChecked) {
+            replyInitialBatchChecked = true;
+            replyHiddenBatchId = active ? '' : state.batch_id;
+        }
+        return !active && state.batch_id === replyHiddenBatchId ? [] : state.tasks;
+    }
 
     /** 创建与采集页相同的分享文本输入行；回复方式和文案由整批公共设置决定。 */
     function addReplyVideo(data = {}) {
@@ -525,8 +536,10 @@
         const state = await api('/api/comment-replies'), xpaths = await api('/api/comment-replies/xpaths');
         replyRegions = [...state.regions];
         replyRunning = ['starting', 'running'].includes(state.status);
+        const restoredTasks = visibleReplyTasks(state);
         $('replyVideos').replaceChildren();
-        if (state.tasks.length) state.tasks.forEach(task => addReplyVideo(task)); else addReplyVideo();
+        if (replyRunning && restoredTasks.length) restoredTasks.forEach(task => addReplyVideo(task)); else addReplyVideo();
+        renderReplyLogs(restoredTasks);
         for (const [key, id] of Object.entries({
             comment_card_xpath: 'replyCardXpath',
             reply_button_xpath: 'replyButtonXpath',
@@ -619,13 +632,15 @@
                 replyLogCards.clear();
                 $('replyLogs').replaceChildren();
             }
-            renderReplyLogs(state.tasks);
+            const visibleTasks = visibleReplyTasks(state);
+            renderReplyLogs(visibleTasks);
             const active = ['starting', 'running'].includes(state.status);
             replyRunning = active;
             $('stopReply').disabled = !active;
             $('replyVideos').querySelectorAll('textarea,input,button').forEach(input => input.disabled = active);
             syncReplyPresetControls();
-            syncReplyDialog(state);
+            // 被刷新隐藏的旧批次也不能重新弹出上一轮的确认窗口。
+            syncReplyDialog(visibleTasks.length ? state : {...state, waiting: null});
         } catch (error) {
             showNotice(error.message, true);
         } finally {
