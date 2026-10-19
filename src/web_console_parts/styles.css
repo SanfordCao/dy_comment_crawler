@@ -2225,6 +2225,9 @@ select {
     border-radius: 12px
 }
 
+/* 图标按钮的 display:grid 不能覆盖终态停止按钮的 hidden 语义。 */
+.queue-stop[hidden] { display: none !important; }
+
 .task-logs {
     display: grid;
     gap: 14px;

@@ -10,6 +10,11 @@
                     <button id="startReply" type="button" class="btn primary">启动回复任务</button>
                     <button id="stopReply" type="button" class="btn danger" disabled>停止回复任务</button>
                 </div>
+                <!-- 与采集队列相同，设置折叠时也能查看和停止单个视频。 -->
+                <section id="replyBatchProgress" class="batch-progress" hidden>
+                    <div class="summary"><strong>回复队列</strong><span id="replyBatchSummary"></span></div>
+                    <div id="replyBatchItems" class="batch-items"></div>
+                </section>
                 <button id="replySettingsToggle" class="advanced-toggle" type="button" aria-expanded="true"
                         aria-controls="replySettingsPanel"><span>设置</span><span
                         id="replySettingsToggleLabel">收起　⌃</span></button>
@@ -79,7 +84,7 @@
                 </div>
             </div>
             <div class="card reply-results">
-                <div class="summary"><h2>回复运行日志</h2></div>
+                <div class="statusline" role="status" aria-live="polite"><span id="replyStatusDot" class="dot" aria-hidden="true"></span><strong id="replyStatusText">等待开始</strong></div>
                 <div id="replyLogs" class="task-logs">
                     <div class="log-empty">暂无回复任务，启动后按视频分别显示日志。</div>
                 </div>

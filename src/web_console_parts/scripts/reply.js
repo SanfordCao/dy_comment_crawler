@@ -540,6 +540,8 @@
         $('replyVideos').replaceChildren();
         if (replyRunning && restoredTasks.length) restoredTasks.forEach(task => addReplyVideo(task)); else addReplyVideo();
         renderReplyLogs(restoredTasks);
+        renderReplyTasks(restoredTasks, replyRunning);
+        renderReplyStatus(state, restoredTasks);
         for (const [key, id] of Object.entries({
             comment_card_xpath: 'replyCardXpath',
             reply_button_xpath: 'replyButtonXpath',
@@ -595,6 +597,91 @@
         }
     }
 
+    /** 将回复批次状态映射到采集页共用的圆点样式；隐藏的旧批次恢复为等待开始。 */
+    function renderReplyStatus(state, tasks) {
+        const active = ['starting', 'running'].includes(state.status);
+        let status = '', message = '等待开始';
+        if (active) {
+            status = 'running';
+            message = state.status === 'starting' ? '正在准备回复任务' : '正在筛选评论并回复';
+            if (tasks.some(task => task.status === 'waiting_for_reply')) message = '等待逐条确认回复';
+            else if (tasks.some(task => task.status === 'stopping')) message = '正在停止回复任务';
+        } else if (tasks.length) {
+            if (tasks.some(task => task.status === 'failed')) {
+                status = 'failed';
+                message = '评论回复任务已结束，存在失败任务';
+            } else if (tasks.some(task => ['stopped', 'cancelled', 'interrupted'].includes(task.status))) {
+                message = '评论回复任务已结束，部分或全部任务已停止';
+            } else {
+                status = 'succeeded';
+                message = '评论回复任务已完成';
+            }
+        }
+        $('replyStatusDot').className = `dot${status ? ' ' + status : ''}`;
+        // 相同轮询结果不重复改写，避免读屏持续播报相同状态。
+        if ($('replyStatusText').textContent !== message) $('replyStatusText').textContent = message;
+    }
+
+    /** 共用采集队列外观，每个停止按钮只提交对应视频的任务 ID。 */
+    function renderReplyTasks(tasks, active) {
+        const pending = new Set(['pending', 'starting', 'running', 'waiting_for_reply', 'stopping']);
+        const labels = {pending: '等待', starting: '正在启动', running: '回复中',
+            waiting_for_reply: '等待确认', stopping: '正在停止', complete: '完成',
+            failed: '失败', stopped: '已停止', cancelled: '未启动', interrupted: '已中断'};
+        $('replyBatchProgress').hidden = !tasks.length;
+        const remaining = tasks.filter(task => pending.has(task.status)).length;
+        $('replyBatchSummary').textContent = tasks.length
+            ? `共 ${tasks.length} 个 · 已结束 ${tasks.length - remaining} 个 · 未完成 ${remaining} 个` : '';
+        const box = $('replyBatchItems');
+        box.replaceChildren();
+        tasks.forEach((task, index) => {
+            const row = document.createElement('div'), head = document.createElement('div'),
+                title = document.createElement('strong'), actions = document.createElement('div'),
+                status = document.createElement('span'), stop = document.createElement('button'),
+                url = document.createElement('span');
+            row.className = `batch-item ${task.status === 'complete' ? 'succeeded' : task.status}`;
+            head.className = 'batch-item-head';
+            actions.className = 'queue-actions';
+            title.textContent = `视频 ${index + 1}`;
+            status.textContent = labels[task.status] || task.status;
+            stop.type = 'button';
+            stop.className = 'icon-button queue-stop';
+            stop.title = '停止此视频回复';
+            stop.setAttribute('aria-label', `停止视频 ${index + 1} 回复`);
+            stop.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>';
+            stop.hidden = !pending.has(task.status);
+            stop.disabled = !active || !pending.has(task.status) || task.status === 'stopping';
+            // 不使用批次 ID，避免单条停止误伤整批或其他并发视频。
+            stop.onclick = async () => {
+                stop.disabled = true;
+                try {
+                    await api('/api/comment-replies/stop', {
+                        method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({job_id: task.job_id})
+                    });
+                    showNotice('正在停止此视频回复');
+                    await pollReplyQueue();
+                } catch (error) {
+                    stop.disabled = false;
+                    showNotice(error.message, true);
+                }
+            };
+            url.className = 'batch-item-url';
+            url.textContent = task.video_url || task.share_text || task.job_id;
+            url.title = url.textContent;
+            actions.append(status, stop);
+            head.append(title, actions);
+            row.append(head, url);
+            if (task.error) {
+                const error = document.createElement('div');
+                error.className = 'batch-item-error';
+                error.textContent = task.error;
+                row.append(error);
+            }
+            box.append(row);
+        });
+    }
+
     /** 并发任务可同时等待人工输入；弹窗逐条展示，提交后显示下一条。 */
     function syncReplyDialog(state) {
         const waiting = state.waiting;
@@ -635,6 +722,8 @@
             const visibleTasks = visibleReplyTasks(state);
             renderReplyLogs(visibleTasks);
             const active = ['starting', 'running'].includes(state.status);
+            renderReplyTasks(visibleTasks, active);
+            renderReplyStatus(state, visibleTasks);
             replyRunning = active;
             $('stopReply').disabled = !active;
             $('replyVideos').querySelectorAll('textarea,input,button').forEach(input => input.disabled = active);
