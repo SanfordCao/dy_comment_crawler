@@ -13,13 +13,9 @@
             return null;
         }
         const root = document.createElement('div');
-        root.className = 'reply-video';
-        const head = document.createElement('div');
-        head.className = 'reply-video-head';
-        const title = document.createElement('strong');
-        head.append(title);
-        const linkRow = document.createElement('div');
-        linkRow.className = 'video-link-row';
+        // 与采集页共用列表和输入行样式，不额外包裹视频标题卡片。
+        root.className = 'video-link-row';
+        const linkRow = root;
         const remove = document.createElement('button'), add = document.createElement('button');
         remove.type = add.type = 'button';
         remove.className = 'video-link-add video-link-remove';
@@ -52,9 +48,8 @@
             checkDuplicateReplyVideos(share);
         };
         linkRow.append(share, remove, add);
-        root.append(head, linkRow);
         $('replyVideos').append(root);
-        root.replyFields = {title, linkRow, remove, add, share};
+        root.replyFields = {linkRow, remove, add, share};
         syncReplyVideoRows();
         return root;
     }
@@ -64,7 +59,6 @@
         const rows = [...$('replyVideos').children];
         rows.forEach((row, index) => {
             const fields = row.replyFields;
-            fields.title.textContent = `视频 ${index + 1}`;
             fields.remove.hidden = rows.length === 1;
             fields.add.hidden = index !== rows.length - 1;
             fields.linkRow.classList.toggle('removable', rows.length > 1 && index === rows.length - 1);
@@ -260,6 +254,8 @@
             source_mode: $('replySourceMode').value,
             mode: $('replyMode').value,
             reply_text: $('replyPresetText').value.trim(),
+            concurrent: $('replyConcurrent').checked,
+            concurrency_limit: Number($('replyConcurrencyLimit').value),
             max_minutes: Number($('replyMaxMinutes').value)
         };
     }
@@ -276,8 +272,18 @@
         $('replyPresetText').value = settings.reply_text || '';
         syncReplyDraftField();
         $('replyMaxMinutes').value = settings.max_minutes || 30;
+        $('replyConcurrent').checked = settings.concurrent === true;
+        $('replyConcurrencyLimit').value = settings.concurrency_limit ?? 2;
+        syncReplyConcurrencyOptions();
         centerSelectArrows();
     }
+
+    /** 并发关闭时隐藏数量，保留草稿中的数量供再次开启时使用。 */
+    function syncReplyConcurrencyOptions() {
+        $('replyConcurrencyOptions').hidden = !$('replyConcurrent').checked;
+    }
+
+    $('replyConcurrent').onchange = syncReplyConcurrencyOptions;
 
     /** 只有“预设文字自动回复”需要文案，与服务端校验保持一致。 */
     function syncReplyDraftField() {
@@ -293,7 +299,7 @@
         $('replyPresetManager').querySelectorAll('button').forEach(button => {
             button.disabled = replyPresetBusy || (replyRunning && button.dataset.replyPresetView !== 'true') || button.dataset.permanentlyDisabled === 'true';
         });
-        for (const id of ['replyRegion', 'replyKeyword', 'addReplyKeyword', 'replyMaxMinutes', 'replySourceMode', 'replyMode', 'replyPresetText']) $(id).disabled = disabled || !replyEditing;
+        for (const id of ['replyRegion', 'replyKeyword', 'addReplyKeyword', 'replyMaxMinutes', 'replySourceMode', 'replyMode', 'replyPresetText', 'replyConcurrent', 'replyConcurrencyLimit']) $(id).disabled = disabled || !replyEditing;
         // 查看态或运行中禁用地区输入框时，已展开的候选列表不能留在页面上。
         if ($('replyRegion').disabled) closeReplyRegionList();
         $('replyKeywords').querySelectorAll('button').forEach(button => button.disabled = disabled || !replyEditing);

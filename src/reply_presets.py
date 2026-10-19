@@ -14,13 +14,26 @@ except ImportError:
 
 
 DEFAULT_REPLY_SETTINGS = {"region": "", "keywords": [], "source_mode": "page_first",
-                          "mode": "manual", "reply_text": "", "max_minutes": 30}
+                          "mode": "manual", "reply_text": "", "max_minutes": 30,
+                          "concurrent": False, "concurrency_limit": 2}
+
+
+def validate_reply_concurrency(payload: dict[str, Any]) -> tuple[bool, int]:
+    """Default legacy schemes to serial execution and reject coerced slot values."""
+    concurrent = payload.get("concurrent", False)
+    if type(concurrent) is not bool:
+        raise ValueError("并发开关须为布尔值")
+    concurrency_limit = payload.get("concurrency_limit", 2)
+    if type(concurrency_limit) is not int or not 1 <= concurrency_limit <= 100:
+        raise ValueError("并发数量须为 1 至 100 的整数")
+    return concurrent, concurrency_limit
 
 
 def validate_reply_settings(payload: Any) -> dict[str, Any]:
     """Normalize only task-wide options; reply mode and draft apply to the whole batch."""
     if not isinstance(payload, dict):
         raise ValueError("回复配置必须是 JSON 对象")
+    concurrent, concurrency_limit = validate_reply_concurrency(payload)
     region = payload.get("region", "")
     keywords = payload.get("keywords", [])
     if not isinstance(region, str):
@@ -48,7 +61,8 @@ def validate_reply_settings(payload: Any) -> dict[str, Any]:
     if type(max_minutes) is not int or not 1 <= max_minutes <= 240:
         raise ValueError("运行时长须为 1 至 240 分钟")
     return {"region": region, "keywords": keywords, "source_mode": source_mode,
-            "mode": mode, "reply_text": reply_text, "max_minutes": max_minutes}
+            "mode": mode, "reply_text": reply_text, "max_minutes": max_minutes,
+            "concurrent": concurrent, "concurrency_limit": concurrency_limit}
 
 
 class ReplyPresetStore:

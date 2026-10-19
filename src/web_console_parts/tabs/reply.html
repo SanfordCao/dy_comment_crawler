@@ -1,9 +1,11 @@
     <section id="reply" class="view">
         <div class="reply-layout">
             <div class="card reply-settings">
-                <h2>评论回复配置</h2>
-                <p>粘贴完整分享文本；回复方式、预设文字、地区和关键词对整批生效，最多同时处理 2 个视频，其余排队。</p>
-                <div id="replyVideos"></div>
+                <h2>回复配置</h2>
+                <div class="field"><label for="replyShareText">抖音视频链接</label>
+                    <div id="replyVideos" class="video-links"></div>
+                    <small>请粘贴完整分享文本，不接受单独网址（包括带 modal_id
+                        的链接）。启动前解析全部视频链接，全部通过才开始回复；空输入框忽略。</small></div>
                 <div class="actions">
                     <button id="startReply" type="button" class="btn primary">启动回复任务</button>
                     <button id="stopReply" type="button" class="btn danger" disabled>停止回复任务</button>
@@ -65,6 +67,13 @@
                         <textarea id="replyPresetText" rows="3" maxlength="500"
                                   placeholder="所有命中评论都使用这段文字回复"></textarea>
                         <small>选择“预设文字自动回复”后必填，最多 500 字；结果不确定的评论不会自动重试。</small></div>
+                    <div class="field"><label for="replyConcurrent" class="account-toggle"><input
+                            id="replyConcurrent" type="checkbox" role="switch" aria-describedby="replyConcurrentHelp"><span
+                            class="account-switch" aria-hidden="true"></span>并发回复</label><small id="replyConcurrentHelp">默认关闭，按顺序处理视频。开启后可设置同时处理的视频数量；每个视频独立保存回复结果和日志。</small></div>
+                    <div id="replyConcurrencyOptions" class="field" hidden><label
+                            for="replyConcurrencyLimit">同时处理的视频数量</label><input id="replyConcurrencyLimit"
+                            type="number" min="1" max="100" step="1" value="2"><small>默认 2，可设置
+                        1–100；实际并发不超过待处理的视频数量。</small></div>
                     <div class="field"><label for="replyMaxMinutes">最长运行时间（分钟）</label><input
                             id="replyMaxMinutes" type="number" min="1" max="240" value="30"></div>
                 </div>

@@ -17,13 +17,17 @@ try:
     from .comments import CommentStore, get_aweme_id_from_url
     from .crawler import CommentResponseCollector, ResponseState
     from .output import create_run_directory
+    from .reply_presets import validate_reply_concurrency
     from .video_links import parse_share_texts, resolve_share_rows
+    from .video_metadata import VideoMetadataCollector, validate_metadata_settings
 except ImportError:
     from comment_reply_filter import REGIONS, matches_reply_filter, validate_reply_filter
     from comments import CommentStore, get_aweme_id_from_url
     from crawler import CommentResponseCollector, ResponseState
     from output import create_run_directory
+    from reply_presets import validate_reply_concurrency
     from video_links import parse_share_texts, resolve_share_rows
+    from video_metadata import VideoMetadataCollector, validate_metadata_settings
 
 
 DEFAULT_XPATHS = {
@@ -33,6 +37,20 @@ DEFAULT_XPATHS = {
     "reply_send_xpath": "",
 }
 _PUBLISH_PATH = re.compile(r"/comment/(?:publish|post|create)/", re.IGNORECASE)
+
+
+class _ReplyVideoMetadataCollector(VideoMetadataCollector):
+    """Publish completed metadata responses without blocking the reply workflow."""
+
+    def __init__(self, *args: Any, on_update: Callable[[dict[str, Any]], None]) -> None:
+        """Keep response parsing isolated from locked reply result persistence."""
+        super().__init__(*args)
+        self.on_update = on_update
+
+    async def _handle(self, response: Any, prefixes: list[str]) -> None:
+        """Copy per-page values under the workbench lock, including late responses."""
+        await super()._handle(response, prefixes)
+        self.on_update(dict(self.result))
 
 
 class CommentReplyWorkbench:
@@ -53,6 +71,7 @@ class CommentReplyWorkbench:
         self.job_id = ""
         self.run_directory: Path | None = None
         self.video_url = ""
+        self.video_metadata: dict[str, str] = {}
         self.settings: dict[str, Any] = {}
         self.xpaths = dict(DEFAULT_XPATHS)
         self.items: dict[str, dict[str, Any]] = {}
@@ -152,6 +171,7 @@ class CommentReplyWorkbench:
             self.error = ""
             self.job_id = job_id or datetime.now().strftime("%Y%m%d-%H%M%S-%f")
             self.video_url = video_url
+            self.video_metadata = {}
             self.settings = dict(settings)
             self.items = {}
             self.scanned_ids = set()
@@ -252,12 +272,31 @@ class CommentReplyWorkbench:
             return
         document = {"job_id": self.job_id, "status": self.status,
                     "video_url": self.video_url, "filters": dict(self.settings),
+                    "video_publisher_nickname": self.video_metadata.get("video_publisher_nickname", ""),
+                    "video_title": self.video_metadata.get("video_title", ""),
                     "message": self.message, "error": self.error,
                     "matches": list(self.items.values())}
         path = self.run_directory / "replies.json"
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(path)
+
+    def _save_video_metadata(self, result: dict[str, Any]) -> None:
+        """Persist changed video names atomically with the current reply outcomes."""
+        values = {field: result.get(field, "") for field in
+                  ("video_publisher_nickname", "video_title")}
+        with self.lock:
+            if values != self.video_metadata:
+                self.video_metadata = values
+                self._save_locked()
+
+    def _metadata_settings(self) -> dict[str, str]:
+        """Read global capture paths without changing reply or global settings."""
+        try:
+            payload = json.loads(self.settings_path.with_name("web_console_settings.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = {}
+        return validate_metadata_settings(payload if isinstance(payload, dict) else {})
 
     def _set_status(self, status: str, message: str) -> None:
         """Update page-visible state and durable output in one locked step."""
@@ -280,6 +319,7 @@ class CommentReplyWorkbench:
 
     async def _run_async(self, xpaths: dict[str, str]) -> None:
         """Scroll the independent video page, match API comments, then reply via XPath."""
+        metadata_settings = self._metadata_settings()
         context = await self.browser_session.get_context()
         page = await context.new_page()
         aweme_id = get_aweme_id_from_url(self.video_url)
@@ -290,7 +330,10 @@ class CommentReplyWorkbench:
         started = asyncio.get_running_loop().time()
         idle = 0
         last_save = started
+        metadata_collector = _ReplyVideoMetadataCollector(
+            page, aweme_id, metadata_settings, {}, set(), on_update=self._save_video_metadata)
         try:
+            metadata_collector.attach()
             await page.goto(self.video_url, wait_until="domcontentloaded", timeout=45_000)
             await page.locator('[data-e2e="comment-list"]').wait_for(state="attached", timeout=30_000)
             self._set_status("running", "正在滚动评论区并筛选")
@@ -337,9 +380,19 @@ class CommentReplyWorkbench:
                         item["revision"] = self.revision
                 self._save_locked()
         finally:
-            collector.detach()
-            await collector.drain()
-            await page.close()
+            try:
+                collector.detach()
+                await collector.drain()
+            finally:
+                try:
+                    # Give already received bodies a bounded chance to finish, even on failure.
+                    if metadata_collector.pending:
+                        await asyncio.wait(tuple(metadata_collector.pending), timeout=1)
+                finally:
+                    try:
+                        await metadata_collector.close()
+                    finally:
+                        await page.close()
 
     async def _scan_visible(self, page: Any, store: CommentStore,
                             xpaths: dict[str, str]) -> int:
@@ -539,7 +592,7 @@ class CommentReplyWorkbench:
 
 
 class CommentReplyCoordinator:
-    """Validate a batch, then run at most two independent video reply pages at once."""
+    """Validate a batch, then run independent video pages within its configured limit."""
 
     def __init__(self, browser_session: Any, output_root: Path,
                  license_check: Callable[[], Any], settings_path: Path) -> None:
@@ -558,6 +611,8 @@ class CommentReplyCoordinator:
         self.keywords: list[str] = []
         self.max_minutes = 30
         self.source_mode = "page_first"
+        self.concurrent = False
+        self.concurrency_limit = 2
 
     def get_xpaths(self) -> dict[str, str]:
         """Read the shared reply locators for the advanced configuration panel."""
@@ -582,6 +637,7 @@ class CommentReplyCoordinator:
                 raise RuntimeError("已有评论回复任务正在运行")
             self.starting = True
         try:
+            concurrent, concurrency_limit = validate_reply_concurrency(payload)
             rows = parse_share_texts([video.get("share_text", "") if isinstance(video, dict) else ""
                                      for video in videos])
             region, keywords = validate_reply_filter(payload.get("region", ""),
@@ -606,12 +662,17 @@ class CommentReplyCoordinator:
                                                "mode": mode, "reply_text": reply_text,
                                                "max_minutes": max_minutes,
                                                "source_mode": source_mode,
+                                               "concurrent": concurrent,
+                                               "concurrency_limit": concurrency_limit,
                                                "share_text": row["share_text"]}
             xpaths = self.get_xpaths()
             missing = [key for key, value in xpaths.items() if not value]
             if missing:
                 raise ValueError("请先在回复 XPath 配置中填写：" + "、".join(missing))
             self.license_check()
+            # Freeze the batch controls before link resolution or worker dispatch.
+            with self.lock:
+                self.concurrent, self.concurrency_limit = concurrent, concurrency_limit
             timeout = 45 + 30 * ((len(rows) + 2) // 3)
             resolved = self.browser_session.run(resolve_share_rows(rows), timeout=timeout)
             batch_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -634,7 +695,7 @@ class CommentReplyCoordinator:
                 self.starting = False
 
     def _schedule(self, xpaths: dict[str, str]) -> None:
-        """Dispatch up to two browser pages; finished pages release slots for queued videos."""
+        """Dispatch serially by default; finished pages release configured batch slots."""
         while True:
             with self.lock:
                 active = [item for item in self.entries if item["job"] is not None
@@ -642,7 +703,8 @@ class CommentReplyCoordinator:
                 pending = [item for item in self.entries if item["status"] == "pending"]
                 if not active and not pending:
                     return
-                available = max(0, 2 - len(active))
+                limit = self.concurrency_limit if self.concurrent else 1
+                available = max(0, limit - len(active))
                 to_start = pending[:available]
                 for item in to_start:
                     item["status"] = "starting"
@@ -675,6 +737,7 @@ class CommentReplyCoordinator:
             starting = self.starting
             region, keywords, max_minutes = self.region, list(self.keywords), self.max_minutes
             source_mode = self.source_mode
+            concurrent, concurrency_limit = self.concurrent, self.concurrency_limit
             worker_alive = self.worker is not None and self.worker.is_alive()
         tasks = []
         waiting = None
@@ -696,7 +759,8 @@ class CommentReplyCoordinator:
                 "running" if worker_alive else "complete" if entries else "idle",
                 "tasks": tasks, "waiting": waiting, "regions": list(REGIONS),
                 "settings": {"region": region, "keywords": keywords, "max_minutes": max_minutes,
-                             "source_mode": source_mode}}
+                             "source_mode": source_mode, "concurrent": concurrent,
+                             "concurrency_limit": concurrency_limit}}
 
     def stop(self, job_id: str) -> None:
         """Stop one video by ID, or the full batch when its batch ID is supplied."""

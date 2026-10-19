@@ -114,11 +114,14 @@ WEB_CONSOLE_SCRIPTS = (
     "advanced_config.js",
     "capture.js",
     "results.js",
+    "tutorial.js",
     "bootstrap.js",
 )
 
 WEB_CONSOLE_FRAGMENTS = (
     "styles.css",
+    "tutorial.css",
+    "components/tutorial.html",
     "components/disclaimer.html",
     "components/navigation.html",
     "tabs/capture.html",
@@ -1013,7 +1016,8 @@ class ConsoleState:
                 result.append({"name": directory.name, "type": "reply", "is_active": directory.name in active,
                                "status": data.get("status", "unknown"), "source_url": data.get("video_url", ""),
                                "comment_count": len(matches) if isinstance(matches, list) else 0,
-                               "video_publisher_nickname": "", "video_title": ""})
+                               "video_publisher_nickname": data.get("video_publisher_nickname", ""),
+                               "video_title": data.get("video_title", "")})
             except (OSError, ValueError, TypeError):
                 continue
         return result
@@ -1401,7 +1405,7 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
                 return
             if len(parts) == 4 and parts[:2] == ["api", "reply-runs"] and parts[3] == "excel":
                 body = self.server.state.export_reply_runs([parts[2]])
-                filename = f"{parts[2]}-评论回复.xlsx"
+                filename = excel_download_filename(self.server.state.read_reply_run(parts[2]))
                 self._send_bytes(200, body, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                  'attachment; filename="replies.xlsx"; '
                                  + f"filename*=UTF-8''{quote(filename, safe='')}")

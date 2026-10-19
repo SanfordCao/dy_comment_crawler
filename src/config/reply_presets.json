@@ -3,7 +3,9 @@
   "default_enabled": true,
   "settings": {
     "region": "",
-    "keywords": [],
+    "keywords": [
+      "天津话"
+    ],
     "source_mode": "page_first",
     "mode": "manual",
     "reply_text": "",
@@ -11,7 +13,9 @@
   },
   "default_settings": {
     "region": "",
-    "keywords": [],
+    "keywords": [
+      "天津话"
+    ],
     "source_mode": "page_first",
     "mode": "manual",
     "reply_text": "",

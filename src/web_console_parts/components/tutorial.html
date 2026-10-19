@@ -1,0 +1,88 @@
+    <aside id="tutorialDrawer" class="tutorial-drawer" hidden role="dialog" aria-modal="false"
+           aria-labelledby="tutorialTitle" tabindex="-1">
+        <header class="tutorial-header">
+            <h2 id="tutorialTitle">使用教程</h2>
+            <button id="closeTutorial" class="icon-button" type="button" aria-label="关闭使用教程">×</button>
+        </header>
+        <nav class="tutorial-topics" aria-label="教程分类">
+            <button type="button" data-tutorial-topic="quick" class="active" aria-pressed="true">快速开始</button>
+            <button type="button" data-tutorial-topic="capture" aria-pressed="false">评论采集</button>
+            <button type="button" data-tutorial-topic="reply" aria-pressed="false">评论回复</button>
+            <button type="button" data-tutorial-topic="results" aria-pressed="false">查看结果</button>
+            <button type="button" data-tutorial-topic="advanced" aria-pressed="false">高级配置</button>
+            <button type="button" data-tutorial-topic="faq" aria-pressed="false">常见问题</button>
+        </nav>
+        <div class="tutorial-content">
+            <section data-tutorial-article="quick">
+                <h3>第一次使用</h3>
+                <ol>
+                    <li>在抖音复制视频的完整分享文本，粘贴到采集或回复的视频输入框，不要只粘贴网址。</li>
+                    <li>核对当前使用的配置方案，再启动任务。回复前还需确认整批使用的回复方式和预设文字。</li>
+                    <li>在程序打开的 Chrome 中完成登录或验证，按页面提示继续；通过逐视频日志查看进度。</li>
+                    <li>任务结束后进入结果页，选择任务查看已保存的数据。</li>
+                </ol>
+                <p>首次建议先采集一个视频，确认流程和结果后再批量操作。</p>
+                <button type="button" class="btn tutorial-jump" data-view="crawl" data-target="videoLinks">去粘贴分享文本</button>
+            </section>
+            <section data-tutorial-article="capture" hidden>
+                <h3>评论采集</h3>
+                <ol>
+                    <li>每个输入框粘贴一个视频的完整分享文本；空框会忽略，所有链接解析通过后才开始采集。</li>
+                    <li>在设置中选择评论层级、最多评论数和运行时间。最多评论数为 0 表示不限制；所有层级会运行至完整加载。</li>
+                    <li>查看方案只预览，不会切换当前配置；编辑后保存，再核对“当前使用”标记，点击“应用”可切换方案。</li>
+                    <li>点击“启动采集任务”，从采集队列和逐视频日志观察进度，需要时点击“停止采集任务”。</li>
+                </ol>
+                <p>一级评论默认接口优先，失败自动回到页面滚动。并发默认关闭，增大并发会增加资源消耗和验证风险；获取抖音号也会增加耗时。</p>
+                <button type="button" class="btn tutorial-jump" data-view="crawl" data-target="presetManager">去配置采集方案</button>
+            </section>
+            <section data-tutorial-article="reply" hidden>
+                <h3>筛选并回复评论</h3>
+                <ol>
+                    <li>粘贴完整分享文本，在设置中为整批选择“实时逐条确认”或“预设文字自动回复”，并填写统一的预设回复文字。</li>
+                    <li>设置 IP 属地和评论关键词：多个关键词命中任意一个即可；同时设置地区时，还必须满足地区条件。</li>
+                    <li>方案保存筛选、回复方式、预设文案和运行设置，不包含视频分享文本。查看、编辑不等于应用，启动前核对当前使用方案。</li>
+                    <li>启动后按视频查看回复运行日志；实时确认模式需逐条核对目标和文案后再提交，自动模式会使用当前方案的预设文字发布。</li>
+                </ol>
+                <p>地区以评论接口返回的省级 IP 属地为准，不推断城市或实际位置。默认按顺序处理视频；在方案中开启“并发回复”后，可设置同时处理的视频数量，其余排队。回复的“接口优先”暂未开放。</p>
+                <button type="button" class="btn tutorial-jump" data-view="reply" data-target="replyVideos">去设置视频回复</button>
+                <button type="button" class="btn tutorial-jump" data-view="reply" data-target="replyPresetManager">去配置回复方案</button>
+            </section>
+            <section data-tutorial-article="results" hidden>
+                <h3>查找和导出结果</h3>
+                <ol>
+                    <li>在“结果类型”中选择“采集评论”或“评论回复”，再选择左侧历史任务；找不到新任务时点击刷新。</li>
+                    <li>回复结果保存的是已匹配评论，不代表每条都已成功发布；实际处理情况请结合回复运行日志核对。</li>
+                    <li>用搜索、排序和高级筛选缩小范围；时间筛选按本机时区解释，留空显示全部时间。</li>
+                    <li>勾选历史任务后，可合并导出一个文件或分别下载多个文件。删除所选任务前请确认并做好备份。</li>
+                </ol>
+                <button type="button" class="btn tutorial-jump" data-view="history" data-target="runs">去查看历史任务</button>
+            </section>
+            <section data-tutorial-article="advanced" hidden>
+                <h3>页面变化时调整配置</h3>
+                <ol>
+                    <li>采集 XPath 用于暂停视频和私信操作；私信入口及发送按钮必须填写并保存，不会自动匹配。</li>
+                    <li>采集接口配置通过接口关键路径及 JSON 路径读取视频作者和标题，仅接受与当前任务视频 ID 一致的数据。</li>
+                    <li>回复评论容器 XPath 必须包含 <code>{comment_id}</code>；回复按钮、输入框、发布按钮均相对该容器定位，以 <code>.//</code> 开头。</li>
+                    <li>修改后点击对应的保存按钮，再开始任务；页面结构变化时先核对目标，不要盲目重试发布。</li>
+                </ol>
+                <button type="button" class="btn tutorial-jump" data-view="xpathConfig" data-category="xpathCategory" data-target="xpathSettings">去采集 XPath 配置</button>
+                <button type="button" class="btn tutorial-jump" data-view="xpathConfig" data-category="replyXpathCategory" data-target="replyXpathSettings">去回复 XPath 配置</button>
+            </section>
+            <section data-tutorial-article="faq" hidden>
+                <h3>常见问题排查</h3>
+                <dl>
+                    <dt>为什么分享文本无法解析？</dt>
+                    <dd>重新复制抖音的完整分享文本；单独网址（含 modal_id 的链接也一样）不接受，并检查每个非空输入框。</dd>
+                    <dt>任务等待登录或验证怎么办？</dt>
+                    <dd>在程序打开的 Chrome 窗口完成操作，再按页面提示继续。先看对应视频日志，不要反复启动任务。</dd>
+                    <dt>为什么修改方案后没有生效？</dt>
+                    <dd>查看只是预览，编辑草稿需保存；核对“当前使用”标记，切换方案需点击“应用”。整批回复文案和方式在方案中设置。</dd>
+                    <dt>为什么没有匹配到回复评论？</dt>
+                    <dd>检查关键词是否已添加、IP 属地是否选对；多个关键词是“或”，地区与关键词是“且”。同时查看加载和运行日志。</dd>
+                    <dt>回复定位失败或结果不确定怎么办？</dt>
+                    <dd>先核对抖音实际发布结果与日志，再检查回复 XPath，避免重复发布。已匹配结果不等于发布成功。</dd>
+                </dl>
+                <button type="button" class="btn tutorial-jump" data-view="reply" data-target="replyVideos">去检查回复配置与日志</button>
+            </section>
+        </div>
+    </aside>

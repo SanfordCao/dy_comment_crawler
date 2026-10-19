@@ -4,8 +4,9 @@
     /** 根据结果类型选择隔离的服务端路由。 */
     const historyApiRoot = () => historyType() === 'reply' ? '/api/reply-runs' : '/api/runs';
     const runPublisher = run => run?.video_publisher_nickname || "作者未知";
-    /** 回复任务尚无视频元数据时，用视频 ID 区分任务而非显示空标题。 */
-    const runVideoTitle = run => run?.video_title || (run?.type === 'reply' ? `视频 ${String(run?.source_url || '').match(/\d{15,22}/)?.[0] || '未知'}` : "标题未知");
+    const runVideoTitle = run => run?.video_title || "标题未知";
+    /** 采集与回复共用任务名称，缺失信息采用相同的回退文字。 */
+    const runDisplayName = run => `${runPublisher(run)}-${runVideoTitle(run)}`;
 
     const checkedRuns = new Set();
     let historyRuns = [], historyBusy = false, exportTargets = [];
@@ -59,7 +60,7 @@
                 heading.className = "run-heading";
                 const label = document.createElement("span");
                 label.className = "run-label";
-                label.textContent = historyType() === 'reply' ? runVideoTitle(run) : `${runPublisher(run)}-${runVideoTitle(run)}`;
+                label.textContent = runDisplayName(run);
                 heading.append(label);
                 const id = document.createElement("span");
                 id.className = "run-id";
@@ -100,7 +101,7 @@
         for (const info of deleteTarget) {
             const primary = document.createElement('div'), id = document.createElement('div');
             primary.className = 'dialog-run-primary';
-            primary.textContent = historyType() === 'reply' ? runVideoTitle(info) : `${runPublisher(info)}-${runVideoTitle(info)}`;
+            primary.textContent = runDisplayName(info);
             id.className = 'dialog-run-id';
             id.textContent = info.name;
             box.append(primary, id);
@@ -160,7 +161,7 @@
                 for (const {run} of failed) {
                     const primary = document.createElement('div'), id = document.createElement('div');
                     primary.className = 'dialog-run-primary';
-                    primary.textContent = historyType() === 'reply' ? runVideoTitle(run) : `${runPublisher(run)}-${runVideoTitle(run)}`;
+                    primary.textContent = runDisplayName(run);
                     id.className = 'dialog-run-id';
                     id.textContent = run.name;
                     box.append(primary, id);
@@ -323,7 +324,7 @@
         selectedRunInfo = run;
         await loadSelectedRun(run);
         if ((run.type === 'reply' ? 'reply' : 'capture') !== historyType() || selectedRun !== run.name) return;
-        $("runTitle").textContent = run.type === 'reply' ? runVideoTitle(run) : `${runPublisher(run)} ${runVideoTitle(run)}`;
+        $("runTitle").textContent = runDisplayName(run);
         $("runMeta").textContent = run.name
     };
     /** 切换结果类型时清除旧类型的预览、勾选和私信状态，避免跨类型误操作。 */
