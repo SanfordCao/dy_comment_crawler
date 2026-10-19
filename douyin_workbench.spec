@@ -28,9 +28,8 @@ datas = [
     (str(root / 'src' / 'web_console_parts'), 'web_console_parts'),
     (str(public_key), 'licensing'),
 ] + collect_data_files('customtkinter')
-# 只打包持久化配置，不把运行队列或以后误放的密钥带给用户。
-for name in ('web_console_settings.json', 'capture_settings.json', 'capture_presets.json',
-             'comment_reply_xpath.json', 'reply_presets.json'):
+# 只打包仓库管理的 XPath/接口；本机参数和方案由启动代码生成。
+for name in ('web_console_settings.json', 'comment_reply_xpath.json'):
     config = root / 'src' / 'config' / name
     if not config.is_file():
         raise SystemExit(f'缺少默认配置：{config}')

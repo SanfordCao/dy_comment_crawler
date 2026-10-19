@@ -5,6 +5,25 @@ tools/admin_keys/
 .douyin-browser-profile/
 src/config/disclaimer_ack.json
 config/disclaimer_ack.json
+# 本机配置和写入临时文件；XPath/接口配置继续提交 Git。
+/src/config/capture_settings.json
+/src/config/capture_presets.json
+/src/config/reply_presets.json
+/src/config/batch_state.json
+/src/config/capture_settings.tmp
+/src/config/capture_presets.tmp
+/src/config/reply_presets.tmp
+/src/config/batch_state.tmp
+/src/config/disclaimer_ack.tmp
+/config/capture_settings.json
+/config/capture_presets.json
+/config/reply_presets.json
+/config/batch_state.json
+/config/capture_settings.tmp
+/config/capture_presets.tmp
+/config/reply_presets.tmp
+/config/batch_state.tmp
+/config/disclaimer_ack.tmp
 __pycache__/
 *.py[cod]
 .pytest_cache/

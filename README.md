@@ -30,6 +30,8 @@
 
 ## Windows 首次安装
 
+配置分为仓库配置与本机配置：`web_console_settings.json`（采集 XPath/接口）和 `comment_reply_xpath.json`（回复 XPath）继续提交 Git，并随 EXE 打包。采集参数、采集方案、回复方案在首次启动时按代码默认值自动生成，已有文件不会覆盖；默认只有“默认配置”，回复采用逐条确认、关闭并发，不预填筛选条件或回复文字。本机参数、方案、任务状态及免责声明确认记录不提交 Git、不随 EXE 分发；后两者仅在实际产生任务或确认时保存。源码配置位于 `src/config/`，EXE 配置位于程序同级 `config/`。
+
 安装 Python 3.12 和 Google Chrome，然后在项目根目录执行一次：
 
 ```powershell

@@ -29,7 +29,7 @@ try:
     from .private_chat import open_user_chat, send_user_message, validated_message, validated_sec_uid
     from .private_chat_batch import PrivateChatBatch
     from .comment_reply_workbench import CommentReplyCoordinator
-    from .reply_presets import ReplyPresetStore
+    from .reply_presets import ReplyPresetStore, DEFAULT_REPLY_SETTINGS
     from .export_comments_excel import export_comments_to_excel, export_comment_rows, export_reply_rows
     from .output import read_result_json
     from .video_links import resolve_video_link, parse_share_texts, resolve_share_rows, ShareValidationError
@@ -40,7 +40,7 @@ except ImportError:
     from private_chat import open_user_chat, send_user_message, validated_message, validated_sec_uid
     from private_chat_batch import PrivateChatBatch
     from comment_reply_workbench import CommentReplyCoordinator
-    from reply_presets import ReplyPresetStore
+    from reply_presets import ReplyPresetStore, DEFAULT_REPLY_SETTINGS
     from export_comments_excel import export_comments_to_excel, export_comment_rows, export_reply_rows
     from video_links import resolve_video_link, parse_share_texts, resolve_share_rows, ShareValidationError
     from video_metadata import METADATA_DEFAULTS, validate_metadata_settings
@@ -56,8 +56,7 @@ CAPTURE_DEFAULTS = {
 }
 
 PACKAGED_CONFIG_FILES = (
-    "web_console_settings.json", "capture_settings.json", "capture_presets.json",
-    "comment_reply_xpath.json", "reply_presets.json",
+    "web_console_settings.json", "comment_reply_xpath.json",
 )
 
 
@@ -86,17 +85,33 @@ def save_disclaimer_acceptance(path: Path) -> None:
 
 
 def initialize_packaged_config(project_root: Path) -> None:
-    """将包内默认配置补齐到 EXE 同级目录，已有配置始终保留。"""
-    if not getattr(sys, "frozen", False):
-        return
+    """补齐本机默认设置；发行版另复制 XPath，绝不覆盖已有配置。"""
     source = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "config"
     destination = console_config_dir(project_root)
     destination.mkdir(parents=True, exist_ok=True)
+    # 参数和方案来自代码，不携带开发电脑上的过滤条件、自动回复文案或任务状态。
+    defaults = {
+        "capture_settings.json": CAPTURE_DEFAULTS,
+        "capture_presets.json": {"selected": "", "default_enabled": True, "presets": []},
+        "reply_presets.json": {"selected": "", "default_enabled": True,
+                               "settings": DEFAULT_REPLY_SETTINGS,
+                               "default_settings": DEFAULT_REPLY_SETTINGS, "presets": []},
+    }
+    for name, document in defaults.items():
+        target = destination / name
+        try:
+            # 排他创建防止重复启动覆盖另一进程或用户已保存的配置。
+            with target.open("x", encoding="utf-8") as stream:
+                stream.write(json.dumps(document, ensure_ascii=False, indent=2) + "\n")
+        except FileExistsError:
+            pass
+    if not getattr(sys, "frozen", False):
+        return
     for name in PACKAGED_CONFIG_FILES:
         target = destination / name
         if target.exists():
             continue
-        # 白名单仅含持久化设置，不恢复开发机器的任务或授权状态。
+        # 只有仓库管理的 XPath/接口配置作为 EXE 初始配置。
         data = (source / name).read_bytes()
         try:
             with target.open("xb") as stream:
@@ -209,6 +224,8 @@ class ConsoleState:
         """初始化工作台，采集输出可与配置目录分开保存。"""
         self.project_root = project_root.resolve()
         self.capture_authorization: Callable[[], dict] | None = None
+        # 记住初始化前的状态，补齐默认文件不能阻断旧版任务中的参数迁移。
+        capture_settings_missing = not (console_config_dir(self.project_root) / "capture_settings.json").exists()
         initialize_packaged_config(self.project_root)
         # EXE 的结果放在程序旁，不能跟随配置写到 AppData 或临时解包目录。
         self.output_base = (output_base or self.project_root).resolve()
@@ -293,7 +310,7 @@ class ConsoleState:
         try:
             saved = json.loads(self.batch_path.read_text(encoding="utf-8"))
             if isinstance(saved, dict) and isinstance(saved.get("items"), list):
-                if not self.capture_settings_path.exists() and isinstance(saved.get("options"), dict):
+                if capture_settings_missing and isinstance(saved.get("options"), dict):
                     self.capture_settings = self._validated_capture_settings(saved["options"])
                 self.batch = saved
                 if saved.get("status") in {"running", "stopping"}:
@@ -304,7 +321,7 @@ class ConsoleState:
                 self._save_batch_locked()
         except (OSError, ValueError, TypeError, KeyError):
             pass
-        if not self.capture_settings_path.exists():
+        if capture_settings_missing:
             self.save_capture_settings(self.capture_settings)
         self.capture_presets_path = self.settings_path.with_name("capture_presets.json")
 
