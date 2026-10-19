@@ -114,6 +114,7 @@ WEB_CONSOLE_SCRIPTS = (
     "advanced_config.js",
     "capture.js",
     "results.js",
+    "tutorial_steps.js",
     "tutorial.js",
     "bootstrap.js",
 )

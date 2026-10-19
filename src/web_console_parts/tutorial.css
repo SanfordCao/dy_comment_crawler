@@ -1,115 +1,43 @@
-/* 教程独立于业务表单，打开后仍允许操作工作台。 */
-.tutorial-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    flex: none;
-    padding: 10px 15px;
-    border: 1px solid #c9d9d2;
-    border-radius: 12px;
-    background: #fffdf8;
-    color: var(--teal2);
-    font-weight: 650;
+/* 模块选择与逐步提示分开显示，业务页面始终保持可操作。 */
+.tutorial-trigger { display:inline-flex;align-items:center;gap:8px;flex:none;padding:10px 15px;border:1px solid #c9d9d2;border-radius:12px;background:var(--card);color:var(--teal2);font-weight:650; }
+.tutorial-trigger span { display:grid;place-items:center;width:21px;height:21px;border:1.5px solid currentColor;border-radius:50%;font-size:13px; }
+.tutorial-drawer { position:fixed;z-index:15;top:12px;right:12px;bottom:12px;width:min(490px,calc(100vw - 24px));display:flex;flex-direction:column;border:1px solid var(--line);border-radius:20px;background:var(--card);box-shadow:-12px 0 55px #17211e26;overflow:hidden; }
+.tutorial-drawer[hidden],.tutorial-coachmark[hidden],.tutorial-coachmark [hidden] { display:none!important; }
+.tutorial-header { display:flex;align-items:flex-start;justify-content:space-between;padding:22px 24px 14px;gap:14px; }
+.tutorial-header h2 { margin:0;font-size:23px; }
+.tutorial-header p { margin:6px 0 0;font-size:14px;color:var(--muted); }
+#closeTutorial,.tutorial-exit { display:grid;place-items:center;flex:none;width:32px;height:32px;border:0;border-radius:9px;background:#edf1ed;color:var(--ink);font-size:23px;line-height:1; }
+.tutorial-content { padding:0 24px 24px;overflow-y:auto;min-height:0; }
+.tutorial-modules { display:grid;gap:12px; }
+.tutorial-module-card { position:relative;padding:16px;border:1px solid var(--line);border-radius:14px;background:#fff; }
+.tutorial-module-card h3 { margin:0 0 6px;font-size:17px; }
+.tutorial-module-card p { margin:6px 0 12px;color:var(--muted);font-size:14px; }
+.tutorial-module-status { color:var(--teal2);font-size:12px; }
+.tutorial-module-actions,.tutorial-complete-actions { display:flex;flex-wrap:wrap;gap:8px; }
+.tutorial-module-actions .btn { padding:7px 12px;font-size:14px; }
+.tutorial-faq { margin-top:18px;padding:12px 14px;border:1px solid var(--line);border-radius:12px; }
+.tutorial-faq summary { cursor:pointer;font-weight:650; }
+.tutorial-faq dt { margin-top:14px;font-weight:650;font-size:14px; }
+.tutorial-faq dd { margin:4px 0 10px;color:var(--muted);font-size:14px; }
+.tutorial-reading-note { color:var(--muted);font-size:12px;margin:16px 0 0; }
+/* 常规弹窗为20、图片预览为30，只有教程对应弹窗的步骤才显示在其上方。 */
+.tutorial-coachmark { position:fixed;z-index:40;width:min(360px,calc(100vw - 24px));max-height:calc(100vh - 24px);overflow:auto;border:1px solid #a9cec0;border-radius:16px;background:var(--card);color:var(--ink);box-shadow:0 12px 42px #17211e30;font-size:14px; }
+.tutorial-coach-header { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line); }
+.tutorial-text-button { border:0;background:transparent;color:var(--teal2);padding:5px 0;font-size:13px; }
+.tutorial-coach-content { padding:15px 18px 10px; }
+.tutorial-step-meta { display:flex;justify-content:space-between;gap:12px;color:var(--teal2);font-size:12px;font-weight:650; }
+.tutorial-coachmark h3 { margin:10px 0 8px;font-size:18px;line-height:1.5; }
+.tutorial-coachmark p { margin:8px 0;line-height:1.8;overflow-wrap:anywhere; }
+.tutorial-step-hint { background:#eff5f1;border-radius:8px;padding:9px 11px;color:var(--muted);font-size:12px; }
+.tutorial-step-actions { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 18px 16px; }
+.tutorial-step-actions .btn { padding:8px 14px;font-size:14px; }
+.tutorial-coachmark .btn:disabled { opacity:.45;cursor:default; }
+.tutorial-highlight { outline:3px solid var(--teal)!important;outline-offset:5px;border-radius:9px;scroll-margin:24px; }
+/* 底部提示占用的空间也从滚动区域预留，避免最后一项永远藏在卡片下面。 */
+@media(max-width:600px) {
+    body.tutorial-bottom-space { padding-bottom:var(--tutorial-clearance,320px); }
+    .dialog-backdrop.tutorial-dialog-space { padding-bottom:var(--tutorial-clearance,320px); }
+    .dialog-backdrop.tutorial-dialog-space .dialog { max-height:calc(100vh - var(--tutorial-clearance,320px) - 40px);overflow-y:auto; }
 }
-.tutorial-trigger span {
-    display: grid;
-    place-items: center;
-    width: 21px;
-    height: 21px;
-    border: 1.5px solid currentColor;
-    border-radius: 50%;
-    font-size: 13px;
-}
-.tutorial-drawer {
-    position: fixed;
-    z-index: 15;
-    top: 12px;
-    right: 12px;
-    bottom: 12px;
-    width: min(460px, calc(100vw - 24px));
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--line);
-    border-radius: 20px;
-    background: var(--card);
-    box-shadow: -12px 0 55px #17211e26;
-    overflow: hidden;
-    transform: translateX(calc(100% + 24px));
-    transition: transform .2s ease;
-}
-.tutorial-drawer[hidden] { display: none; }
-.tutorial-drawer.is-open { transform: translateX(0); }
-.tutorial-drawer header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 20px 22px 12px;
-    gap: 12px;
-}
-.tutorial-drawer h2 { margin: 0; font-size: 23px; }
-#closeTutorial {
-    display: grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    border: 0;
-    border-radius: 10px;
-    background: #edf1ed;
-    color: var(--ink);
-    font-size: 24px;
-}
-.tutorial-drawer nav {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-    padding: 0 22px 17px;
-    border-bottom: 1px solid var(--line);
-}
-.tutorial-drawer nav button {
-    border: 1px solid transparent;
-    border-radius: 8px;
-    padding: 6px 11px;
-    color: var(--muted);
-    background: #edf1ed;
-    font-size: 14px;
-}
-.tutorial-drawer nav button.active { color: #fff; background: var(--teal); }
-.tutorial-content { padding: 6px 24px 25px; overflow-y: auto; min-height: 0; }
-.tutorial-content h3 { margin: 18px 0 10px; font-size: 20px; }
-.tutorial-content h4 { margin: 20px 0 5px; font-size: 15px; }
-.tutorial-content p, .tutorial-content li { color: var(--muted); line-height: 1.85; }
-.tutorial-content ol, .tutorial-content ul { padding-left: 22px; }
-.tutorial-content li { padding: 4px 0; }
-.tutorial-content strong { color: var(--ink); }
-.tutorial-content dt { margin-top: 18px; font-weight: 650; }
-.tutorial-content dd { margin: 6px 0 14px; color: var(--muted); line-height: 1.85; }
-.tutorial-jump {
-    padding: 9px 14px;
-    border: 1px solid #bddbd1;
-    border-radius: 10px;
-    background: #edf8f4;
-    color: var(--teal2);
-    font-weight: 650;
-    margin: 6px 5px 4px 0;
-}
-.tutorial-trigger:focus-visible, .tutorial-drawer button:focus-visible {
-    outline: 2px solid var(--teal);
-    outline-offset: 3px;
-}
-.tutorial-highlight {
-    outline: 3px solid var(--teal) !important;
-    outline-offset: 6px;
-    border-radius: 10px;
-    animation: tutorial-pulse 1s ease-in-out 3;
-}
-@keyframes tutorial-pulse { 50% { outline-color: #0f766e55; } }
-@media (max-width: 600px) {
-    .top { align-items: flex-start; flex-wrap: wrap; }
-    .tutorial-drawer header { padding: 16px 18px 12px; }
-    .tutorial-drawer nav { padding: 0 18px 15px; }
-    .tutorial-content { padding: 4px 20px 20px; }
-}
-@media (prefers-reduced-motion: reduce) {
-    .tutorial-drawer { transition: none; }
-    .tutorial-highlight { animation: none; }
-}
+.tutorial-trigger:focus-visible,.tutorial-drawer button:focus-visible,.tutorial-coachmark button:focus-visible,.tutorial-faq summary:focus-visible { outline:2px solid var(--teal);outline-offset:3px; }
+@media(max-width:600px) { .top { align-items:flex-start;flex-wrap:wrap; } .tutorial-header { padding:18px 18px 12px; } .tutorial-content { padding:0 18px 18px; } .tutorial-coach-content { padding:10px 15px 6px; } .tutorial-coachmark h3 { font-size:16px; } .tutorial-step-actions { padding:8px 15px 12px; } }
