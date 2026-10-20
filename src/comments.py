@@ -129,13 +129,14 @@ def get_aweme_id_from_url(raw_url: str) -> str:
     except ValueError:
         return ""
 
+    match = re.fullmatch(r"/(?:share/)?(?:video|note)/(\d+)/?", parsed.path)
+    ids = {match.group(1)} if match else set()
     for name in ("aweme_id", "item_id", "modal_id"):
-        value = query.get(name, [""])[0]
-        if value.isdigit():
-            return value
-
-    match = re.search(r"/video/(\d+)", parsed.path)
-    return match.group(1) if match else ""
+        for value in query.get(name, []):
+            if not value.isdigit():
+                return ""
+            ids.add(value)
+    return next(iter(ids)) if len(ids) == 1 else ""
 
 
 def extract_top_level_comment_array(payload: Any) -> list[dict[str, Any]]:

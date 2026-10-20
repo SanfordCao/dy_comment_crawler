@@ -15,7 +15,10 @@ import time
 try:
     from .comment_reply_filter import REGIONS, matches_reply_filter, validate_reply_filter
     from .comments import CommentStore, get_aweme_id_from_url
-    from .crawler import CommentResponseCollector, ResponseState, _find_blocking_state
+    from .crawler import (
+        CommentResponseCollector, ResponseState, _find_blocking_state,
+        _prepare_comment_panel, _verify_work_page, _VISIBLE_COMMENT_LIST, _NOTE_DETAIL,
+    )
     from .output import create_run_directory
     from .reply_presets import validate_reply_concurrency, validate_retry_limit
     from .video_links import parse_share_texts, resolve_share_rows
@@ -23,7 +26,10 @@ try:
 except ImportError:
     from comment_reply_filter import REGIONS, matches_reply_filter, validate_reply_filter
     from comments import CommentStore, get_aweme_id_from_url
-    from crawler import CommentResponseCollector, ResponseState, _find_blocking_state
+    from crawler import (
+        CommentResponseCollector, ResponseState, _find_blocking_state,
+        _prepare_comment_panel, _verify_work_page, _VISIBLE_COMMENT_LIST, _NOTE_DETAIL,
+    )
     from output import create_run_directory
     from reply_presets import validate_reply_concurrency, validate_retry_limit
     from video_links import parse_share_texts, resolve_share_rows
@@ -423,9 +429,11 @@ class CommentReplyWorkbench:
             await self._retry_read(
                 lambda: page.goto(self.video_url, wait_until="domcontentloaded", timeout=45_000), "视频页面", page=page,
                 skip_when=lambda: response_state.top_level_comments_null)
-            await self._retry_read(
-                lambda: page.locator('[data-e2e="comment-list"]').wait_for(state="attached", timeout=30_000),
-                "评论列表", page=page, skip_when=lambda: response_state.top_level_comments_null)
+            await collector.drain()
+            if not response_state.top_level_comments_null:
+                await _prepare_comment_panel(page, aweme_id, self.settings.get("retry_limit", 3),
+                                             self.stop_event.is_set, response_state,
+                                             wait_access=lambda: self._wait_manual_access(page))
             self._set_status("running", "正在滚动评论区并筛选")
             while not self.stop_event.is_set():
                 await collector.drain()
@@ -439,10 +447,13 @@ class CommentReplyWorkbench:
                 if asyncio.get_running_loop().time() - started >= self.settings["max_minutes"] * 60:
                     self._set_status("complete", self._completion_message("达到设定运行时长"))
                     break
+                await _verify_work_page(page, aweme_id)
                 previous_cursor = response_state.cursor
                 previous_total = len(store)
                 try:
                     await collector.drain()
+                    if response_state.top_level_comments_null:
+                        continue
                     discovered = await self._scan_visible(page, store, xpaths)
                     if self.stop_event.is_set():
                         break
@@ -519,12 +530,16 @@ class CommentReplyWorkbench:
     async def _scan_visible(self, page: Any, store: CommentStore,
                             xpaths: dict[str, str]) -> int:
         """Process DOM cards by comment ID, verifying author sec_uid before any click."""
-        rows = await page.evaluate("""() => [...document.querySelectorAll('[data-e2e="comment-item"]')]
+        await _verify_work_page(page, get_aweme_id_from_url(self.video_url))
+        rows = await page.evaluate("""() => {
+          const list = VISIBLE_LIST;
+          return [...(list?.querySelectorAll('[data-e2e="comment-item"]') || [])]
             .map(card => {
               const id = card.querySelector('[data-e2e="video-comment-more"] [id^="tooltip_"]')?.id || '';
               const author = card.querySelector('a[href*="/user/"]')?.getAttribute('href') || '';
               return {comment_id: id.startsWith('tooltip_') ? id.slice(8) : '', author};
-            }).filter(row => row.comment_id)""")
+            }).filter(row => row.comment_id);
+        }""".replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST))
         new_count = 0
         for row in rows:
             cid = row["comment_id"]
@@ -554,7 +569,7 @@ class CommentReplyWorkbench:
     async def _scroll_comments(self, page: Any) -> dict[str, Any]:
         """Move the actual comment scroller without wheel events that switch videos."""
         result = await page.evaluate("""() => {
-          const list = document.querySelector('[data-e2e="comment-list"]');
+          const list = VISIBLE_LIST;
           if (!list) return {found:false};
           let node = list;
           while (node && node !== document.body && node !== document.documentElement) {
@@ -567,11 +582,12 @@ class CommentReplyWorkbench:
             }
             node = node.parentElement;
           }
+          if (NOTE_DETAIL) return {found:true, before:0, after:0, at_end:true};
           const before = window.scrollY;
           window.scrollBy(0, Math.max(450, Math.round(innerHeight * .7)));
           return {found:true, before, after:window.scrollY,
                   at_end:window.scrollY + innerHeight >= document.documentElement.scrollHeight - 4};
-        }""")
+        }""".replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST).replace("NOTE_DETAIL", _NOTE_DETAIL))
         if not result.get("found"):
             raise RuntimeError("未找到评论列表，停止滚动以避免切换视频")
         return result
@@ -636,8 +652,15 @@ class CommentReplyWorkbench:
     async def _publish_once(self, page: Any, cid: str, text: str,
                             xpaths: dict[str, str]) -> None:
         """Click one exact card, fill DraftJS, submit once and verify a publish response."""
+        await _verify_work_page(page, get_aweme_id_from_url(self.video_url))
         card_xpath = xpaths["comment_card_xpath"].replace("{comment_id}", cid)
         card = await self._unique_visible(page, page.locator("xpath=" + card_xpath), "目标评论")
+        in_list = await card.evaluate("""card => {
+          const list = VISIBLE_LIST;
+          return !!list && list.contains(card);
+        }""".replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST))
+        if not in_list:
+            raise RuntimeError("目标评论不在可见评论列表中，未发送")
         # 配置 XPath 可能过宽或页面已重绘；真正点击前再核对卡片的两个身份字段。
         identity = await card.evaluate("""card => {
           const tooltip = card.querySelector('[data-e2e="video-comment-more"] [id^="tooltip_"]');
@@ -671,6 +694,7 @@ class CommentReplyWorkbench:
 
         page.on("response", on_response)
         try:
+            await _verify_work_page(page, get_aweme_id_from_url(self.video_url))
             await send.click(timeout=10_000)
             try:
                 response = await asyncio.wait_for(response_future, timeout=10)

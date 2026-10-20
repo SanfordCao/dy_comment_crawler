@@ -122,7 +122,7 @@ def video_id_from_link(url: str) -> str:
     """从独立视频、分享页或 modal_id 提取 ID，冲突时拒绝猜测。"""
     validate_douyin_url(url)
     parsed = urlparse(url)
-    match = re.fullmatch(r"/(?:share/)?video/([0-9]+)/?", parsed.path)
+    match = re.fullmatch(r"/(?:share/)?(?:video|note)/([0-9]+)/?", parsed.path)
     ids = {match.group(1)} if match else set()
     query = parse_qs(parsed.query)
     for key in ("modal_id", "aweme_id", "item_id"):

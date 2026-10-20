@@ -136,6 +136,76 @@ async def _randomized_pause(config: CrawlerConfig, scale: float = 1.0) -> None:
     await asyncio.sleep(random.randint(minimum, maximum) / 1_000)
 
 
+# Use the same visibility rule for preparation, scanning and scrolling.
+_VISIBLE_COMMENT_LIST = """[...document.querySelectorAll('[data-e2e="comment-list"]')].find(e => {
+  const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+  return r.width > 0 && r.height > 0 && s.display !== 'none' &&
+    s.visibility !== 'hidden' && s.visibility !== 'collapse' &&
+    e.checkVisibility?.({checkOpacity:true, checkVisibilityCSS:true}) !== false;
+})"""
+_NOTE_DETAIL = r"""(/^\/note\/\d+/.test(location.pathname) ||
+  !!document.querySelector('[data-e2e="note-detail"], [data-e2e="note-detail-container"], #note-detail'))"""
+
+
+async def _verify_work_page(page: Page, aweme_id: str) -> None:
+    parsed = urlparse(page.url)
+    host = (parsed.hostname or "").lower()
+    official = host == "douyin.com" or host.endswith(".douyin.com")
+    if not official or not aweme_id or get_aweme_id_from_url(page.url) != aweme_id:
+        raise RuntimeError("页面作品 ID 与目标不一致，已停止操作，防止操作其他作品")
+
+
+async def _prepare_comment_panel(page: Page, aweme_id: str, retry_limit: int,
+                                 stop_requested: Callable[[], bool] | None,
+                                 state: ResponseState,
+                                 wait_access: Callable[[], Awaitable[Any]] | None = None) -> None:
+    """Open a note's comments once per document; retries only wait for visibility."""
+    for attempt in range(retry_limit + 1):
+        for tick in range(30):
+            if state.top_level_comments_null:
+                return
+            if stop_requested and stop_requested():
+                raise asyncio.CancelledError
+            if wait_access is not None:
+                access_task = asyncio.create_task(wait_access())
+                try:
+                    while not access_task.done():
+                        if state.top_level_comments_null:
+                            return
+                        if stop_requested and stop_requested():
+                            raise asyncio.CancelledError
+                        await asyncio.wait({access_task}, timeout=0.1)
+                    await access_task
+                finally:
+                    if not access_task.done():
+                        access_task.cancel()
+                    await asyncio.gather(access_task, return_exceptions=True)
+            if state.top_level_comments_null:
+                return
+            await _verify_work_page(page, aweme_id)
+            if await page.evaluate("() => !!(" + _VISIBLE_COMMENT_LIST + ")"):
+                return
+            if attempt == 0 and tick < 5:
+                await page.wait_for_timeout(100)
+                continue
+            toggle = await page.evaluate("""() => {
+              if (document.readyState === "loading" || !(NOTE_DETAIL) || window.__douyinCommentsOpened) return false;
+              if (VISIBLE_LIST) return false;
+              window.__douyinCommentsOpened = true;
+              const active = document.activeElement;
+              if (active && active !== document.body) active.blur();
+              return true;
+            }""".replace("NOTE_DETAIL", _NOTE_DETAIL).replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST))
+            if toggle:
+                if state.top_level_comments_null:
+                    return
+                await _verify_work_page(page, aweme_id)
+                await page.keyboard.press("x")
+            await page.wait_for_timeout(100)
+    if not state.top_level_comments_null:
+        raise RuntimeError(f"未找到可见评论列表，已用尽 {retry_limit} 次重试")
+
+
 async def _goto_with_retries(page: Page, config: CrawlerConfig, state: ResponseState) -> None:
     """Bound initial video navigation failures using the page's retry budget."""
     for attempt in range(config.retry_limit + 1):
@@ -379,6 +449,9 @@ async def _expand_reply_threads(page: Page, config: CrawlerConfig, state: Respon
     for attempt in range(40):
         if config.stop_requested and config.stop_requested():
             return clicked
+        if state.top_level_comments_null:
+            return clicked
+        await _verify_work_page(page, get_aweme_id_from_url(config.url))
         token = f"codex-expand-{attempt}-{random.randint(100000, 999999)}"
         result = None
         try:
@@ -396,32 +469,10 @@ async def _expand_reply_threads(page: Page, config: CrawlerConfig, state: Respon
                       style.display !== "none" && style.visibility !== "hidden";
                   };
 
-                  const commentRoots = Array.from(
-                    document.querySelectorAll('[data-e2e="comment-list"]')
-                  ).filter(visible);
-                  let root = commentRoots.find(element => {
-                    const rect = element.getBoundingClientRect();
-                    return rect.right > window.innerWidth * 0.55;
-                  }) || commentRoots[0] || null;
-                  if (!root) {
-                    let probe = document.elementFromPoint(
-                      Math.max(1, window.innerWidth - 150),
-                      window.innerHeight / 2
-                    );
-                    while (probe && probe !== document.body) {
-                      const style = window.getComputedStyle(probe);
-                      if (
-                        ["auto", "scroll", "overlay"].includes(style.overflowY) &&
-                        probe.scrollHeight > probe.clientHeight
-                      ) {
-                        root = probe;
-                        break;
-                      }
-                      probe = probe.parentElement;
-                    }
-                  }
-                  const searchRoot = root || document;
-                  const constrainToRightSide = !root;
+                  const root = VISIBLE_LIST;
+                  if (!root) return {found: false};
+                  const searchRoot = root;
+                  const constrainToRightSide = false;
 
                   const elements = searchRoot.querySelectorAll(
                     'button, [role="button"], a, [data-e2e*="reply"], div, span, p'
@@ -447,7 +498,7 @@ async def _expand_reply_threads(page: Page, config: CrawlerConfig, state: Respon
                   }
                   return {found: false, reason: "reply-control-missing"};
                 }
-                """,
+                """.replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST).replace("NOTE_DETAIL", _NOTE_DETAIL),
                 {"token": token, "blocked": list(state.skipped_reply_ids)},
             )
             if not result or not result.get("found"):
@@ -664,7 +715,8 @@ async def _scroll_comment_panel(
         scroll_result = await page.evaluate(
             """
             ({x, y, delta, jumpToEnd}) => {
-              let element = document.elementFromPoint(x, y);
+              let element = VISIBLE_LIST;
+              if (!element) return {found: false};
               let depth = 0;
               while (
                 element &&
@@ -684,7 +736,7 @@ async def _scroll_comment_panel(
                   element.scrollTop = jumpToEnd
                     ? element.scrollHeight
                     : element.scrollTop + delta;
-                  element.dispatchEvent(
+                  if (!(NOTE_DETAIL)) element.dispatchEvent(
                     new WheelEvent("wheel", {
                       deltaY: delta,
                       bubbles: true,
@@ -711,7 +763,7 @@ async def _scroll_comment_panel(
               }
               return {found: false};
             }
-            """,
+            """.replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST).replace("NOTE_DETAIL", _NOTE_DETAIL),
             {
                 "x": probe_x,
                 "y": probe_y,
@@ -748,7 +800,8 @@ async def _reset_comment_panel_to_top(page: Page) -> bool:
     result = await page.evaluate(
         """
         ({x, y}) => {
-          let element = document.elementFromPoint(x, y);
+          let element = VISIBLE_LIST;
+          if (!element) return false;
           while (element && element !== document.body) {
             const style = window.getComputedStyle(element);
             if (
@@ -763,7 +816,7 @@ async def _reset_comment_panel_to_top(page: Page) -> bool:
           }
           return false;
         }
-        """,
+        """.replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST).replace("NOTE_DETAIL", _NOTE_DETAIL),
         {
             "x": max(1, viewport["width"] - 150),
             "y": viewport["height"] / 2,
@@ -906,6 +959,7 @@ async def _try_collect_top_level_by_network(
         before_responses = response_state.top_level_response_count
         before_count = len(store)
         before_cursor = cursor
+        await _verify_work_page(page, get_aweme_id_from_url(config.url))
         try:
             fetch_result = await asyncio.wait_for(
                 page.evaluate(
@@ -1004,12 +1058,12 @@ async def _comment_scroll_position(page: Page) -> float | None:
     """Read the active comment viewport, so ordinary traversal is not a failure."""
     try:
         return await page.evaluate("""() => {
-          const list = [...document.querySelectorAll('[data-e2e="comment-list"]')].find(e => e.getBoundingClientRect().height > 0);
+          const list = VISIBLE_LIST;
           for(let e=list;e && e!==document.body;e=e.parentElement) {
             if (['auto','scroll','overlay'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight) return e.scrollTop;
           }
           return null;
-        }""")
+        }""".replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST))
     except PlaywrightError:
         return None
 
@@ -1018,7 +1072,7 @@ async def _comment_panel_fits_viewport(page: Page) -> bool:
     """Recognize a visible short list that legitimately needs no scrollbar."""
     try:
         return bool(await page.evaluate("""() => {
-          const list = [...document.querySelectorAll('[data-e2e="comment-list"]')].find(e => e.getBoundingClientRect().height > 0);
+          const list = VISIBLE_LIST;
           if (!list) return false;
           const rect = list.getBoundingClientRect();
           if (rect.top < 0 || rect.bottom > innerHeight) return false;
@@ -1026,7 +1080,7 @@ async def _comment_panel_fits_viewport(page: Page) -> bool:
             if (['auto','scroll','overlay'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight) return false;
           }
           return true;
-        }"""))
+        }""".replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST)))
     except PlaywrightError:
         return False
 
@@ -1067,6 +1121,7 @@ async def _collect_by_scrolling(
         ):
             return "达到 max-comments 限制"
 
+        await _verify_work_page(page, get_aweme_id_from_url(config.url))
         if round_number == 1 or round_number % 8 == 0:
             await _wait_for_manual_challenge(
                 page,
@@ -1103,6 +1158,7 @@ async def _collect_by_scrolling(
         # 展开动作就暂不滚动，避免虚拟列表卸载尚未处理的一级评论。
         found_target = True
         before_top_cursor = response_state.cursor
+        await _verify_work_page(page, get_aweme_id_from_url(config.url))
         before_scroll_position = await _comment_scroll_position(page)
         if expanded_count == 0:
             found_target = await _scroll_comment_panel(
@@ -1620,6 +1676,7 @@ async def crawl_douyin_comments(
                 "确认无新增和无展开入口后才结束"
             )
         print(f"打开页面：{config.url}")
+        preparation_error = ""
         await _goto_with_retries(page, config, response_state)
         await collector.drain()
         if not response_state.top_level_comments_null:
@@ -1630,13 +1687,28 @@ async def crawl_douyin_comments(
                 initial_state = await _find_blocking_state(page)
                 if (config.require_initial_login or (owned_context and profile_is_new)) and not initial_state:
                     initial_state = "首次使用专用浏览器配置，请先登录抖音"
-                await _wait_for_manual_challenge(page, config, initial_state)
-                paused = await _pause_configured_video(page, config)
+                async def wait_comment_access() -> None:
+                    nonlocal initial_state
+                    if not response_state.top_level_comments_null:
+                        blocking = initial_state or await _find_blocking_state(page)
+                        initial_state = ""
+                        await _wait_for_manual_challenge(page, config, blocking)
+
+                try:
+                    await _prepare_comment_panel(page, aweme_id, config.retry_limit,
+                                                 config.stop_requested, response_state,
+                                                 wait_access=wait_comment_access)
+                except Exception as error:
+                    response_state.load_failures["top_level"] = config.retry_limit + 1
+                    response_state.warnings.add(str(error))
+                    _checkpoint(run_directory, result, store, response_state)
+                    preparation_error = str(error)
+                paused = False if preparation_error or response_state.top_level_comments_null else await _pause_configured_video(page, config)
                 if config.pause_xpath.strip() and not paused:
                     response_state.warnings.add("自动暂停视频失败，请检查暂停按钮 XPath")
                 await collector.drain()
 
-        if not response_state.top_level_comments_null:
+        if not response_state.top_level_comments_null and not preparation_error:
             # 独立视频页自动显示评论列表，无需点击图标；接口监听已在导航前注册。
             await metadata_collector.wait(config.action_timeout_ms, config.stop_requested)
             print(
@@ -1648,7 +1720,7 @@ async def crawl_douyin_comments(
             await collector.drain()
         _checkpoint(run_directory, result, store, response_state)
 
-        network_stop_reason = await _try_collect_top_level_by_network(
+        network_stop_reason = preparation_error or await _try_collect_top_level_by_network(
             page=page,
             config=config,
             store=store,
@@ -1674,6 +1746,7 @@ async def crawl_douyin_comments(
 
         if (
             response_state.response_count == 0
+            and not preparation_error
             and result["summary"]["stop_reason"] != "页面明确显示暂无评论"
         ):
             raise RuntimeError(

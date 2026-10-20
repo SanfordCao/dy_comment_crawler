@@ -55,7 +55,7 @@
             try {
                 const url = new URL(links[0]);
                 if (["douyin.com", "iesdouyin.com"].some(domain => url.hostname === domain || url.hostname.endsWith("." + domain))) {
-                    const pathId = url.pathname.match(/^\/(?:share\/)?video\/(\d+)\/?$/)?.[1];
+                    const pathId = url.pathname.match(/^\/(?:share\/)?(?:video|note)\/(\d+)\/?$/)?.[1];
                     const ids = new Set([pathId, ...["modal_id", "aweme_id", "item_id"].flatMap(key => url.searchParams.getAll(key))].filter(id => /^\d+$/.test(id || "")));
                     if (ids.size === 1) return "video:" + [...ids][0];
                     if (!ids.size && url.hostname === "v.douyin.com") return "short:" + url.hostname + url.pathname.replace(/\/$/, "") + url.search;
