@@ -133,6 +133,67 @@ button {
     color: var(--muted)
 }
 
+.field-label-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 6px
+}
+
+.field .field-label-row > label {
+    margin-bottom: 0
+}
+
+.option-help-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 19px;
+    width: 19px;
+    height: 19px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    background: white;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: help
+}
+
+.option-help-button:hover, .option-help-button:focus-visible {
+    color: var(--ink);
+    border-color: var(--ink)
+}
+
+.option-help-button:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 3px
+}
+
+.option-help-tooltip {
+    position: fixed;
+    z-index: 1500;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: min(340px, calc(100vw - 24px));
+    max-height: min(300px, calc(100dvh - 24px));
+    overflow: auto;
+    padding: 10px 13px;
+    border-radius: 10px;
+    background: var(--ink);
+    color: white;
+    box-shadow: 0 8px 24px #0003;
+    font-size: 13px;
+    line-height: 1.65;
+    overflow-wrap: anywhere
+}
+
+.option-help-tooltip[hidden] {
+    display: none
+}
+
 input, select {
     width: 100%;
     border: 1px solid var(--line);

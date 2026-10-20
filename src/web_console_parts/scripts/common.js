@@ -1,4 +1,16 @@
     const $ = id => document.getElementById(id);
+    /** 校验重试上限；显式拒绝空值和小数，避免空输入被转换为“不重试”。 */
+    function validateRetryLimit(value) {
+        if (value === '' || value == null || !Number.isInteger(Number(value)) || Number(value) < 0 || Number(value) > 10) {
+            throw new Error('失败重试次数必须是 0～10 的整数');
+        }
+        return Number(value);
+    }
+
+    /** 读取方案编辑框；查看其他方案不会改变实际任务的重试配置。 */
+    function readRetryLimit(id) {
+        return validateRetryLimit($(id).value);
+    }
     let selectedRun = "", selectedRunInfo = null, allComments = [], lastStatus = "";
     let licenseFailure = "";
 

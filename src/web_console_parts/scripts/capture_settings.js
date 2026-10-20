@@ -10,6 +10,7 @@
         fetch_douyin_id: $("fetchDouyinId").checked,
         concurrent: $("concurrent").checked,
         concurrency_limit: +$("concurrencyLimit").value,
+        retry_limit: $("retryLimit").value === '' ? null : Number($("retryLimit").value),
         challenge_wait_minutes: +$("waitMinutes").value,
         idle_rounds: 8,
         scroll_pixels: 700
@@ -21,7 +22,7 @@
         scroll_direction: "direction", min_delay_ms: "minDelay",
         max_delay_ms: "maxDelay", challenge_wait_minutes: "waitMinutes",
         fetch_douyin_id: "fetchDouyinId", concurrent: "concurrent",
-        concurrency_limit: "concurrencyLimit"
+        concurrency_limit: "concurrencyLimit", retry_limit: "retryLimit"
     };
 
     // 并发关闭时隐藏数量输入，保留已设置的值供下次开启使用。
@@ -34,9 +35,9 @@
     /** 将 settings 回显到表单，无返回值；只显示参数，不触发保存或方案切换。 */
     function applyCaptureSettings(settings) {
         for (const [key, id] of Object.entries(captureFields)) {
-            if (settings[key] == null) continue;
+            if (settings[key] == null && key !== "retry_limit") continue;
             if ($(id).type === "checkbox") $(id).checked = settings[key] === true;
-            else $(id).value = settings[key];
+            else $(id).value = settings[key] ?? 3;
         }
         syncConcurrencyOptions();
         centerSelectArrows();
@@ -57,6 +58,7 @@
     /** 返回表单参数副本；仅用于方案编辑，不能直接作为实际采集配置。 */
     const currentCaptureSettings = () => {
         const options = payload();
+        options.retry_limit = validateRetryLimit(options.retry_limit);
         return Object.fromEntries(Object.keys(captureFields).map(key => [key, options[key]]));
     };
     Object.values(captureFields).forEach(id => $(id).addEventListener("change", () => {
@@ -219,10 +221,17 @@
     /** 执行 action/name 操作；settingsOverride 可指定参数，无值时使用编辑表单。 */
     async function managePreset(action, name, settingsOverride = null) {
         if (presetBusy || captureRunning) return;
+        // 在锁定控件前校验草稿，失败后仍允许修正并再次保存。
+        let settings;
+        try {
+            settings = settingsOverride || (["create", "update", "custom"].includes(action) ? currentCaptureSettings() : null);
+        } catch (error) {
+            showNotice(error.message, true);
+            return;
+        }
         presetBusy = true;
         syncPresetControls();
         // 排在当前表单的自动保存之后，防止旧设置晚到覆盖新加载的方案。
-        const settings = settingsOverride || currentCaptureSettings();
         const request = captureSaveChain.then(() => api("/api/capture-presets", {
             method: "POST", headers: {"Content-Type": "application/json"},
             body: JSON.stringify({action, name, settings})

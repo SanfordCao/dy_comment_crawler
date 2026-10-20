@@ -15,17 +15,17 @@ import time
 try:
     from .comment_reply_filter import REGIONS, matches_reply_filter, validate_reply_filter
     from .comments import CommentStore, get_aweme_id_from_url
-    from .crawler import CommentResponseCollector, ResponseState
+    from .crawler import CommentResponseCollector, ResponseState, _find_blocking_state
     from .output import create_run_directory
-    from .reply_presets import validate_reply_concurrency
+    from .reply_presets import validate_reply_concurrency, validate_retry_limit
     from .video_links import parse_share_texts, resolve_share_rows
     from .video_metadata import VideoMetadataCollector, validate_metadata_settings
 except ImportError:
     from comment_reply_filter import REGIONS, matches_reply_filter, validate_reply_filter
     from comments import CommentStore, get_aweme_id_from_url
-    from crawler import CommentResponseCollector, ResponseState
+    from crawler import CommentResponseCollector, ResponseState, _find_blocking_state
     from output import create_run_directory
-    from reply_presets import validate_reply_concurrency
+    from reply_presets import validate_reply_concurrency, validate_retry_limit
     from video_links import parse_share_texts, resolve_share_rows
     from video_metadata import VideoMetadataCollector, validate_metadata_settings
 
@@ -151,7 +151,7 @@ class CommentReplyWorkbench:
         resolved = self.browser_session.run(resolve_share_rows(rows), timeout=75)
         settings = {"region": region, "keywords": keywords, "mode": mode,
                     "reply_text": reply_text, "max_minutes": max_minutes,
-                    "share_text": rows[0]["share_text"]}
+                    "share_text": rows[0]["share_text"], "retry_limit": validate_retry_limit(payload)}
         return self.start_resolved(resolved[0], settings, xpaths)
 
     def start_resolved(self, row: dict[str, Any], settings: dict[str, Any],
@@ -172,7 +172,7 @@ class CommentReplyWorkbench:
             self.job_id = job_id or datetime.now().strftime("%Y%m%d-%H%M%S-%f")
             self.video_url = video_url
             self.video_metadata = {}
-            self.settings = dict(settings)
+            self.settings = {**settings, "retry_limit": validate_retry_limit(settings)}
             self.items = {}
             self.scanned_ids = set()
             self.revision = 0
@@ -311,6 +311,77 @@ class CommentReplyWorkbench:
             return f"{reason}，未匹配到符合条件的评论，任务完成"
         return f"{reason}，回复任务完成"
 
+    async def _retry_pause(self, seconds: float = 0.8) -> None:
+        """Poll stop requests during the normal loading delay rather than blocking shutdown."""
+        deadline = asyncio.get_running_loop().time() + seconds
+        while asyncio.get_running_loop().time() < deadline:
+            if self.stop_event.is_set():
+                raise RuntimeError("任务已停止")
+            await asyncio.sleep(min(0.1, max(0, deadline - asyncio.get_running_loop().time())))
+
+    def _loading_failed(self, target: str, failures: int, reason: str, *, stop_video: bool = True) -> None:
+        """Log one failed loading attempt and stop this video when its budget is spent."""
+        limit = self.settings.get("retry_limit", 3)
+        exhausted = failures > limit
+        exhausted_action = ("达到上限，停止当前视频；结果可能不完整" if stop_video
+                            else "达到上限，跳过当前评论，不发布")
+        action = exhausted_action if exhausted else f"准备重试 {failures}/{limit}"
+        with self.lock:
+            self._log_locked(f"{target}加载失败：{reason}；{action}")
+        if exhausted:
+            raise RuntimeError(f"{target}加载失败，已用尽 {limit} 次重试；{exhausted_action}：{reason}")
+
+    async def _wait_manual_access(self, page: Any) -> bool:
+        """Pause for visible login/verification without consuming a loading attempt."""
+        blocker = await _find_blocking_state(page)
+        if not blocker:
+            return False
+        self._set_status("running", f"等待人工处理登录或验证：{blocker}，不计入失败重试")
+        deadline = asyncio.get_running_loop().time() + 30 * 60
+        while blocker:
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError("等待人工登录或验证超时；结果可能不完整")
+            await self._retry_pause(0.8)
+            blocker = await _find_blocking_state(page)
+        self._set_status("running", "登录或验证已完成，继续筛选评论")
+        return True
+
+    async def _retry_read(self, operation: Callable[[], Any], target: str, *,
+                          stop_video: bool = True, page: Any = None,
+                          skip_when: Callable[[], bool] | None = None) -> Any:
+        """Retry reads only; callers must never pass clicks, text insertion or publishing."""
+        failures = 0
+        while not self.stop_event.is_set():
+            if skip_when is not None and skip_when():
+                return None
+            try:
+                pending = asyncio.ensure_future(operation())
+                try:
+                    while not pending.done():
+                        if skip_when is not None and skip_when():
+                            return None
+                        if self.stop_event.is_set():
+                            raise RuntimeError("任务已停止")
+                        await asyncio.wait((pending,), timeout=0.1)
+                    if skip_when is not None and skip_when():
+                        return None
+                    return pending.result()
+                finally:
+                    if not pending.done():
+                        pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+            except Exception as error:
+                if skip_when is not None and skip_when():
+                    return None
+                if self.stop_event.is_set():
+                    raise RuntimeError("任务已停止") from error
+                if page is not None and await self._wait_manual_access(page):
+                    continue
+                failures += 1
+                self._loading_failed(target, failures, str(error), stop_video=stop_video)
+                await self._retry_pause()
+        raise RuntimeError("任务已停止")
+
     def _log_cleanup_warning(self, action: str, error: BaseException) -> None:
         """Keep cleanup-only failures from overwriting an already finished result."""
         try:
@@ -349,38 +420,64 @@ class CommentReplyWorkbench:
             page, aweme_id, metadata_settings, {}, set(), on_update=self._save_video_metadata)
         try:
             metadata_collector.attach()
-            await page.goto(self.video_url, wait_until="domcontentloaded", timeout=45_000)
-            await page.locator('[data-e2e="comment-list"]').wait_for(state="attached", timeout=30_000)
+            await self._retry_read(
+                lambda: page.goto(self.video_url, wait_until="domcontentloaded", timeout=45_000), "视频页面", page=page,
+                skip_when=lambda: response_state.top_level_comments_null)
+            await self._retry_read(
+                lambda: page.locator('[data-e2e="comment-list"]').wait_for(state="attached", timeout=30_000),
+                "评论列表", page=page, skip_when=lambda: response_state.top_level_comments_null)
             self._set_status("running", "正在滚动评论区并筛选")
             while not self.stop_event.is_set():
+                await collector.drain()
+                if response_state.top_level_comments_null:
+                    self._set_status("complete", self._completion_message("评论接口返回 comments=null，跳过当前视频"))
+                    break
+                wait_started = asyncio.get_running_loop().time()
+                if await self._wait_manual_access(page):
+                    # Manual access waits are not part of the configured processing time.
+                    started += asyncio.get_running_loop().time() - wait_started
                 if asyncio.get_running_loop().time() - started >= self.settings["max_minutes"] * 60:
                     self._set_status("complete", self._completion_message("达到设定运行时长"))
                     break
-                await collector.drain()
-                discovered = await self._scan_visible(page, store, xpaths)
-                if self.stop_event.is_set():
-                    break
+                previous_cursor = response_state.cursor
                 previous_total = len(store)
-                scroll = await self._scroll_comments(page)
-                await asyncio.sleep(0.8)
-                await collector.drain()
+                try:
+                    await collector.drain()
+                    discovered = await self._scan_visible(page, store, xpaths)
+                    if self.stop_event.is_set():
+                        break
+                    scroll = await self._scroll_comments(page)
+                    await self._retry_pause()
+                    await collector.drain()
+                except Exception as error:
+                    if self.stop_event.is_set():
+                        break
+                    if await self._wait_manual_access(page):
+                        continue
+                    idle += 1
+                    self._loading_failed("评论列表", idle, str(error))
+                    await self._retry_pause()
+                    continue
                 if get_aweme_id_from_url(page.url) != aweme_id:
                     raise RuntimeError("页面切换到了其他视频，已停止回复，防止回复错视频")
-                if discovered or len(store) > previous_total:
+                if response_state.top_level_comments_null:
+                    self._set_status("complete", self._completion_message("评论接口返回 comments=null，跳过当前视频"))
+                    break
+                if (discovered or len(store) > previous_total or response_state.cursor != previous_cursor
+                        or scroll.get("after") != scroll.get("before")):
                     idle = 0
                 else:
                     idle += 1
+                    if scroll["at_end"] and response_state.top_level_response_count > 0 and response_state.has_more is False:
+                        self._set_status("complete", self._completion_message("评论接口已确认加载结束"))
+                        break
+                    # Already-loaded cards may span several screens without another request.
+                    # Only a stationary viewport with no data/cursor progress spends retries.
+                    self._loading_failed("评论列表", idle, "未获取新增评论或有效分页推进")
                 if asyncio.get_running_loop().time() - last_save >= 3:
                     with self.lock:
                         self._save_locked()
                     last_save = asyncio.get_running_loop().time()
-                if scroll["at_end"] and idle >= 8:
-                    if response_state.top_level_response_count == 0:
-                        raise RuntimeError("未捕获到评论列表响应，不能认定评论已加载完整")
-                    if response_state.has_more is True:
-                        raise RuntimeError("评论接口仍显示还有更多，但页面已无法继续滚动；结果不完整")
-                    self._set_status("complete", self._completion_message("评论区连续多轮无新增"))
-                    break
             try:
                 collector.detach()
                 await collector.drain()
@@ -540,7 +637,7 @@ class CommentReplyWorkbench:
                             xpaths: dict[str, str]) -> None:
         """Click one exact card, fill DraftJS, submit once and verify a publish response."""
         card_xpath = xpaths["comment_card_xpath"].replace("{comment_id}", cid)
-        card = await self._unique_visible(page.locator("xpath=" + card_xpath), "目标评论")
+        card = await self._unique_visible(page, page.locator("xpath=" + card_xpath), "目标评论")
         # 配置 XPath 可能过宽或页面已重绘；真正点击前再核对卡片的两个身份字段。
         identity = await card.evaluate("""card => {
           const tooltip = card.querySelector('[data-e2e="video-comment-more"] [id^="tooltip_"]');
@@ -551,15 +648,15 @@ class CommentReplyWorkbench:
         with self.lock:
             expected_sec_uid = str(self.items[cid]["comment"].get("author", {}).get("sec_uid", ""))
         self._verify_card_identity(cid, expected_sec_uid, identity)
-        button = await self._unique_visible(card.locator("xpath=" + xpaths["reply_button_xpath"]), "回复按钮")
+        button = await self._unique_visible(page, card.locator("xpath=" + xpaths["reply_button_xpath"]), "回复按钮")
         await button.click(timeout=10_000)
-        editor = await self._unique_visible(card.locator("xpath=" + xpaths["reply_editor_xpath"]), "回复输入框")
+        editor = await self._unique_visible(page, card.locator("xpath=" + xpaths["reply_editor_xpath"]), "回复输入框")
         await editor.click(timeout=10_000)
         await page.keyboard.insert_text(text)
         entered = (await editor.inner_text(timeout=10_000)).strip()
         if entered != text:
             raise RuntimeError("输入框内容与待发送文字不一致，未点击发布")
-        send = await self._unique_visible(card.locator("xpath=" + xpaths["reply_send_xpath"]), "发送按钮")
+        send = await self._unique_visible(page, card.locator("xpath=" + xpaths["reply_send_xpath"]), "发送按钮")
         if not await send.is_enabled():
             raise RuntimeError("发送按钮不可用，未点击发布")
         self._update_item(cid, "sending", reply_text=text)
@@ -609,15 +706,18 @@ class CommentReplyWorkbench:
         if identity.get("comment_id") != cid or not sec_uid or author_path != f"/user/{sec_uid}":
             raise RuntimeError("目标评论卡片的评论 ID 或作者 sec_uid 不匹配，未点击回复")
 
-    @staticmethod
-    async def _unique_visible(locator: Any, label: str) -> Any:
+    async def _unique_visible(self, page: Any, locator: Any, label: str) -> Any:
         """Reject hidden duplicates instead of clicking the first ambiguous match."""
-        await locator.first.wait_for(state="attached", timeout=10_000)
-        visible = [locator.nth(index) for index in range(await locator.count())
-                   if await locator.nth(index).is_visible()]
-        if len(visible) != 1:
-            raise RuntimeError(f"{label}可见匹配 {len(visible)} 个，需要唯一目标")
-        return visible[0]
+        async def locate() -> Any:
+            """Read the current DOM again without replaying a reply click or editing text."""
+            await locator.first.wait_for(state="attached", timeout=10_000)
+            visible = [locator.nth(index) for index in range(await locator.count())
+                       if await locator.nth(index).is_visible()]
+            if len(visible) != 1:
+                raise RuntimeError(f"{label}可见匹配 {len(visible)} 个，需要唯一目标")
+            return visible[0]
+
+        return await self._retry_read(locate, label, stop_video=False, page=page)
 
 
 class CommentReplyCoordinator:
@@ -642,6 +742,7 @@ class CommentReplyCoordinator:
         self.source_mode = "page_first"
         self.concurrent = False
         self.concurrency_limit = 2
+        self.retry_limit = 3
 
     def get_xpaths(self) -> dict[str, str]:
         """Read the shared reply locators for the advanced configuration panel."""
@@ -667,6 +768,7 @@ class CommentReplyCoordinator:
             self.starting = True
         try:
             concurrent, concurrency_limit = validate_reply_concurrency(payload)
+            retry_limit = validate_retry_limit(payload)
             rows = parse_share_texts([video.get("share_text", "") if isinstance(video, dict) else ""
                                      for video in videos])
             region, keywords = validate_reply_filter(payload.get("region", ""),
@@ -693,6 +795,7 @@ class CommentReplyCoordinator:
                                                "source_mode": source_mode,
                                                "concurrent": concurrent,
                                                "concurrency_limit": concurrency_limit,
+                                               "retry_limit": retry_limit,
                                                "share_text": row["share_text"]}
             xpaths = self.get_xpaths()
             missing = [key for key, value in xpaths.items() if not value]
@@ -715,6 +818,7 @@ class CommentReplyCoordinator:
                 self.entries = entries
                 self.region, self.keywords, self.max_minutes = region, keywords, max_minutes
                 self.source_mode = source_mode
+                self.retry_limit = retry_limit
                 self.worker = Thread(target=self._schedule, args=(xpaths,), daemon=True,
                                      name="douyin-reply-batch")
                 self.worker.start()
@@ -766,6 +870,7 @@ class CommentReplyCoordinator:
             starting = self.starting
             region, keywords, max_minutes = self.region, list(self.keywords), self.max_minutes
             source_mode = self.source_mode
+            retry_limit = self.retry_limit
             concurrent, concurrency_limit = self.concurrent, self.concurrency_limit
             worker_alive = self.worker is not None and self.worker.is_alive()
         tasks = []
@@ -789,7 +894,7 @@ class CommentReplyCoordinator:
                 "tasks": tasks, "waiting": waiting, "regions": list(REGIONS),
                 "settings": {"region": region, "keywords": keywords, "max_minutes": max_minutes,
                              "source_mode": source_mode, "concurrent": concurrent,
-                             "concurrency_limit": concurrency_limit}}
+                             "concurrency_limit": concurrency_limit, "retry_limit": retry_limit}}
 
     def stop(self, job_id: str) -> None:
         """Stop one video by ID, or the full batch when its batch ID is supplied."""

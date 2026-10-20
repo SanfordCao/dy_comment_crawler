@@ -15,7 +15,15 @@ except ImportError:
 
 DEFAULT_REPLY_SETTINGS = {"region": "", "keywords": [], "source_mode": "page_first",
                           "mode": "manual", "reply_text": "", "max_minutes": 30,
-                          "concurrent": False, "concurrency_limit": 2}
+                          "concurrent": False, "concurrency_limit": 2, "retry_limit": 3}
+
+
+def validate_retry_limit(payload: dict[str, Any]) -> int:
+    """Keep retry budgets explicit; booleans and coerced fractional values are unsafe."""
+    value = payload.get("retry_limit", 3)
+    if type(value) is not int or not 0 <= value <= 10:
+        raise ValueError("失败重试次数须为 0 至 10 的整数")
+    return value
 
 
 def validate_reply_concurrency(payload: dict[str, Any]) -> tuple[bool, int]:
@@ -62,7 +70,8 @@ def validate_reply_settings(payload: Any) -> dict[str, Any]:
         raise ValueError("运行时长须为 1 至 240 分钟")
     return {"region": region, "keywords": keywords, "source_mode": source_mode,
             "mode": mode, "reply_text": reply_text, "max_minutes": max_minutes,
-            "concurrent": concurrent, "concurrency_limit": concurrency_limit}
+            "concurrent": concurrent, "concurrency_limit": concurrency_limit,
+            "retry_limit": validate_retry_limit(payload)}
 
 
 class ReplyPresetStore:

@@ -267,6 +267,7 @@
             reply_text: $('replyPresetText').value.trim(),
             concurrent: $('replyConcurrent').checked,
             concurrency_limit: Number($('replyConcurrencyLimit').value),
+            retry_limit: readRetryLimit('replyRetryLimit'),
             max_minutes: Number($('replyMaxMinutes').value)
         };
     }
@@ -285,6 +286,7 @@
         $('replyMaxMinutes').value = settings.max_minutes || 30;
         $('replyConcurrent').checked = settings.concurrent === true;
         $('replyConcurrencyLimit').value = settings.concurrency_limit ?? 2;
+        $('replyRetryLimit').value = settings.retry_limit ?? 3;
         syncReplyConcurrencyOptions();
         centerSelectArrows();
     }
@@ -310,7 +312,7 @@
         $('replyPresetManager').querySelectorAll('button').forEach(button => {
             button.disabled = replyPresetBusy || (replyRunning && button.dataset.replyPresetView !== 'true') || button.dataset.permanentlyDisabled === 'true';
         });
-        for (const id of ['replyRegion', 'replyKeyword', 'addReplyKeyword', 'replyMaxMinutes', 'replySourceMode', 'replyMode', 'replyPresetText', 'replyConcurrent', 'replyConcurrencyLimit']) $(id).disabled = disabled || !replyEditing;
+        for (const id of ['replyRegion', 'replyKeyword', 'addReplyKeyword', 'replyMaxMinutes', 'replySourceMode', 'replyMode', 'replyPresetText', 'replyConcurrent', 'replyConcurrencyLimit', 'replyRetryLimit']) $(id).disabled = disabled || !replyEditing;
         // 查看态或运行中禁用地区输入框时，已展开的候选列表不能留在页面上。
         if ($('replyRegion').disabled) closeReplyRegionList();
         $('replyKeywords').querySelectorAll('button').forEach(button => button.disabled = disabled || !replyEditing);

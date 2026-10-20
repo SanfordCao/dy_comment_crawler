@@ -4,8 +4,7 @@
                 <h2>回复配置</h2>
                 <div class="field"><label for="replyShareText">抖音视频链接</label>
                     <div id="replyVideos" class="video-links"></div>
-                    <small>请粘贴完整分享文本，不接受单独网址（包括带 modal_id
-                        的链接）。启动前解析全部视频链接，全部通过才开始回复；空输入框忽略。</small></div>
+                    <small>指定本次要筛选评论并回复的视频，可添加多行批量处理。每行粘贴一个视频的完整分享文本，不接受单独网址；启动前统一解析，全部有效才开始任务，空行忽略。</small></div>
                 <div class="actions">
                     <button id="startReply" type="button" class="btn primary">启动回复任务</button>
                     <button id="stopReply" type="button" class="btn danger" disabled>停止回复任务</button>
@@ -49,38 +48,40 @@
                             <ul id="replyRegionOptions" class="combo-list" role="listbox" aria-label="省级地区"
                                 hidden></ul>
                         </div>
-                        <small>按评论接口返回的 IP 属地匹配，不推断城市或实际位置。</small></div>
+                        <small>用于按评论者的 IP 属地筛选待回复评论。选择省级地区后，只匹配评论接口返回该地区的评论；留空则不限制地区。同时设置关键词时须一起满足，不推断城市或实际位置。</small></div>
                     <div class="field"><label for="replyKeyword">评论关键词</label>
                         <div class="reply-keyword-entry"><input id="replyKeyword" maxlength="100"
                                                                 placeholder="输入关键词并添加">
                             <button id="addReplyKeyword" class="btn" type="button">添加</button>
                         </div>
                         <div id="replyKeywords" class="reply-keywords"></div>
-                        <small>多个关键词满足任意一个即可；若选择了地区，还须同时满足地区。</small></div>
+                        <small>用于按评论文本筛选待回复内容。添加多个关键词时，命中任意一个即可；同时选择地区时还须匹配地区。可留空仅按地区筛选，地区和关键词至少设置一项。</small></div>
                     <div class="row">
                         <div class="field"><label for="replySourceMode">评论加载方式</label><select
                                 id="replySourceMode">
                             <option value="page_first">页面元素优先（滚动加载）</option>
                             <option value="interface_first" disabled>接口优先（暂未开放）</option>
-                        </select><small>当前只开放页面滚动加载</small></div>
+                        </select><small>决定如何加载供筛选和回复的评论。目前支持滚动页面评论区加载；接口优先尚未开放。</small></div>
                         <div class="field"><label for="replyMode">回复方式</label><select id="replyMode">
                             <option value="manual">实时逐条确认</option>
                             <option value="automatic">预设文字自动回复</option>
-                        </select><small>整批命中评论使用同一种方式</small></div>
+                        </select><small>决定匹配评论如何获得回复内容并提交。“实时逐条确认”由你逐条填写回复或跳过；“预设文字自动回复”对匹配评论使用统一文案自动发送。整批视频使用同一种方式。</small></div>
                     </div>
                     <div class="field" id="replyDraftField" hidden><label for="replyPresetText">预设回复文字</label>
                         <textarea id="replyPresetText" rows="3" maxlength="500"
                                   placeholder="所有命中评论都使用这段文字回复"></textarea>
-                        <small>选择“预设文字自动回复”后必填，最多 500 字；结果不确定的评论不会自动重试。</small></div>
+                        <small>设置自动回复时统一发送的文案，供所有匹配评论使用。选择“预设文字自动回复”时必填，最多 500 字；请确认文案适用于全部匹配评论，发布结果不确定时不会自动重发。</small></div>
                     <div class="field"><label for="replyConcurrent" class="account-toggle"><input
                             id="replyConcurrent" type="checkbox" role="switch" aria-describedby="replyConcurrentHelp"><span
-                            class="account-switch" aria-hidden="true"></span>并发回复</label><small id="replyConcurrentHelp">默认关闭，按顺序处理视频。开启后可设置同时处理的视频数量；每个视频独立保存回复结果和日志。</small></div>
+                            class="account-switch" aria-hidden="true"></span>并发回复</label><small id="replyConcurrentHelp">决定多个视频是依次处理还是同时筛选并回复。关闭时按顺序处理；开启后按并发数量同时处理，每个视频独立保存结果和日志。默认关闭，并发越大，资源占用和验证概率通常越高。</small></div>
                     <div id="replyConcurrencyOptions" class="field" hidden><label
                             for="replyConcurrencyLimit">同时处理的视频数量</label><input id="replyConcurrencyLimit"
-                            type="number" min="1" max="100" step="1" value="2"><small>默认 2，可设置
-                        1–100；实际并发不超过待处理的视频数量。</small></div>
+                            type="number" min="1" max="100" step="1" value="2"><small>限制开启并发回复后同时处理的视频数，用于平衡批量处理速度和资源占用。默认 2，范围 1–100；实际并发不超过待处理的视频数。</small></div>
                     <div class="field"><label for="replyMaxMinutes">最长运行时间（分钟）</label><input
                             id="replyMaxMinutes" type="number" min="1" max="240" value="30"></div>
+                    <div class="field"><label for="replyRetryLimit">失败重试次数</label><input id="replyRetryLimit"
+                            type="number" min="0" max="10" step="1" value="3" required aria-describedby="replyRetryLimitHelp">
+                        <small id="replyRetryLimitHelp">限制评论加载及发送前定位失败后的重复尝试，避免任务持续请求。默认 3，范围 0–10；首次尝试不计入次数，0 表示不重试。达到上限后跳过失败项或停止当前视频；评论发布不会因此自动重发。</small></div>
                 </div>
             </div>
             <div class="card reply-results">

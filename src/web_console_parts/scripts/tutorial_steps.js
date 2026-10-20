@@ -63,6 +63,7 @@
                     ['concurrent', '并发采集开关', '默认顺序采集；并发会增加资源占用及验证概率。遇到验证会暂停启动新任务。'],
                     ['concurrencyLimit', '同时采集的视频数', '范围 1–100，默认 2；实际不超过待采集视频数。', null, {fallback: 'label[for="concurrent"]', missing: '手动开启并发采集后显示；引导不会切换开关。'}],
                     ['maxMinutes', '最长运行时间', '单位为分钟；仅一级评论模式使用此时长上限，所有层级模式忽略此上限并运行至完整加载。'],
+                    ['retryLimit', '失败重试次数', '默认 3，范围 0–10；首次尝试不计入次数。达到上限跳过失败项，列表无法推进时停止当前视频并保留已有数据。'],
                     ['direction', '加载方向', '选择页面滚动加载方向。'],
                     ['minDelay', '最短滚动等待', '单位毫秒，设置滚动间隔下限；不要通过极短等待追求速度。'],
                     ['maxDelay', '最长滚动等待', '单位毫秒，应不小于最短滚动等待。'],
@@ -102,7 +103,8 @@
                     ['replyPresetText', '预设回复文字', '自动回复时必填，最多 500 字；整批命中评论使用同一文字，不确定结果不会自动重试。', null, {fallback: '#replyMode', missing: '手动选择预设文字自动回复后显示。'}],
                     ['replyConcurrent', '并发回复', '默认按顺序处理视频；开启后每个视频独立保存结果和日志。'],
                     ['replyConcurrencyLimit', '回复并发视频数', '范围 1–100，默认 2，实际不超过待处理视频数。', null, {fallback: 'label[for="replyConcurrent"]', missing: '手动开启并发回复后显示。'}],
-                    ['replyMaxMinutes', '回复最长运行时间', '单位分钟，范围 1–240；请按任务规模设置。']
+                    ['replyMaxMinutes', '回复最长运行时间', '单位分钟，范围 1–240；请按任务规模设置。'],
+                    ['replyRetryLimit', '失败重试次数', '默认 3，范围 0–10；只重试加载与发布前的定位，不会自动重发评论或私信。']
                 ], {expand: 'replySettingsToggle'}),
                 ...tutorialSchemeSteps(true, 'after'),
                 ...tutorialInputSteps('reply', [

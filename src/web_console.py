@@ -13,6 +13,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from uuid import uuid4
 import asyncio
+import errno
 import json
 import mimetypes
 import os
@@ -53,6 +54,7 @@ CAPTURE_DEFAULTS = {
     "min_delay_ms": 800, "max_delay_ms": 1400,
     "challenge_wait_minutes": 30, "fetch_douyin_id": False, "concurrent": False,
     "concurrency_limit": 2,
+    "retry_limit": 3,
 }
 
 PACKAGED_CONFIG_FILES = (
@@ -469,6 +471,8 @@ class ConsoleState:
         # 队列最多允许 100 个视频，并发数量使用同一上限，避免误填超大值。
         if settings["concurrency_limit"] > 100:
             raise ValueError("并发数量不能超过 100")
+        if type(settings["retry_limit"]) is not int or not 0 <= settings["retry_limit"] <= 10:
+            raise ValueError("失败重试次数必须是 0～10 的整数")
         if settings["max_delay_ms"] < settings["min_delay_ms"]:
             raise ValueError("最长滚动等待不能小于最短滚动等待")
         return settings
@@ -841,6 +845,7 @@ class ConsoleState:
                 fetch_mode=str(options.get("fetch_mode", "network_first")),
                 fetch_douyin_id=options.get("fetch_douyin_id") is True,
                 idle_rounds=int(options.get("idle_rounds", 8)),
+                retry_limit=options.get("retry_limit", 3),
                 max_comments=int(options.get("max_comments", 0)),
                 max_minutes=int(options.get("max_minutes", 30)),
                 min_delay_ms=int(options.get("min_delay_ms", 800)),
@@ -855,12 +860,16 @@ class ConsoleState:
             )
             print(f"开始采集：{item['url']}")
             directory, result = await crawl_douyin_comments(config)
+            # 已保存的数据仍可导出，但失败加载不能在队列中冒充完整成功。
+            incomplete = result.get("status") == "incomplete"
             with self.lock:
                 item["run_name"] = directory.name
-                item["status"] = "stopped" if stopped() else "succeeded"
+                item["status"] = "stopped" if stopped() else "failed" if incomplete else "succeeded"
+                if incomplete and not stopped():
+                    item["error"] = result.get("summary", {}).get("stop_reason") or "部分数据加载失败，结果可能不完整"
                 self.summary = result.get("summary")
                 self.run_name = directory.name
-            print("任务已停止，保留已有数据" if stopped() else "评论采集完成")
+            print("任务已停止，保留已有数据" if stopped() else "评论采集结束，部分加载失败，已保留数据；结果可能不完整" if incomplete else "评论采集完成")
         except BaseException as error:
             print(f"抓取失败：{error}")
             print(traceback.format_exc(limit=4))
@@ -1237,6 +1246,9 @@ class ConsoleState:
 class ConsoleServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], state: ConsoleState, manager: LicenseManager) -> None:
         """服务统一持有授权管理器和本机持久化的免责声明确认状态。"""
+        # TCPServer 绑定失败时也会调用本类的 server_close，先准备清理所需字段。
+        self.license_stop = Event()
+        self.license_thread = Thread(target=self._watch_license, name="license-watch", daemon=True)
         super().__init__(address, ConsoleRequestHandler)
         self.state = state
         self.license_manager = manager
@@ -1248,8 +1260,6 @@ class ConsoleServer(ThreadingHTTPServer):
         self.license_failure = ""
         self.license_failure_lock = Lock()
         self.state.capture_authorization = self.check_capture_authorization
-        self.license_stop = Event()
-        self.license_thread = Thread(target=self._watch_license, name="license-watch", daemon=True)
 
     def serve_forever(self, poll_interval: float = 0.5) -> None:
         """进入服务循环时才开启监测，避免启动失败后监测卡在 shutdown。"""
@@ -1695,7 +1705,15 @@ def main() -> None:
 
 def _run_workbench(args: Any, instance: Any = None, manager: LicenseManager | None = None) -> None:
     """运行唯一工作台实例，退出时清理任务、浏览器和托盘。"""
-    server = create_console_server(args.host, args.port, license_manager=manager)
+    try:
+        server = create_console_server(args.host, args.port, license_manager=manager)
+    except OSError as error:
+        if error.errno == errno.EADDRINUSE:
+            raise SystemExit(
+                f"无法启动工作台：{args.host}:{args.port} 已被占用。"
+                "请关闭已运行的工作台后重试，或使用 --port 指定其他端口。"
+            ) from None
+        raise
     url = f"http://{args.host}:{server.server_address[1]}/"
     tray = None
     try:

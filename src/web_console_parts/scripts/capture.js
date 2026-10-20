@@ -146,6 +146,7 @@
             await captureSaveChain;
             // 启动只使用已保存且正在使用的参数，绝不读取其他方案的预览/草稿。
             const options = {...payload(), ...activeCaptureSettings};
+            options.retry_limit = validateRetryLimit(activeCaptureSettings.retry_limit ?? 3);
             // 不过滤空行，以便服务端返回的行号与实际输入框保持一致。
             options.share_texts = Array.from($("videoLinks").querySelectorAll("input"), input => input.value.trim());
             delete options.url;

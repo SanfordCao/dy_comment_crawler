@@ -70,6 +70,7 @@ class CrawlerConfig:
     comment_scope: str = "top_level"
     fetch_mode: str = "network_first"
     fetch_douyin_id: bool = False
+    retry_limit: int = 3
     idle_rounds: int = 8
     max_comments: int = 0
     max_minutes: int = 30
@@ -92,6 +93,11 @@ class CrawlerConfig:
     stop_requested: Callable[[], bool] | None = None
     run_directory_ready: Callable[[Path], None] | None = None
 
+    def __post_init__(self) -> None:
+        """Reject invalid retry budgets even when constructed outside the UI."""
+        if type(self.retry_limit) is not int or not 0 <= self.retry_limit <= 10:
+            raise ValueError("失败重试次数必须是 0～10 的整数")
+
 
 @dataclass(slots=True)
 class ResponseState:
@@ -100,16 +106,62 @@ class ResponseState:
     reply_response_count: int = 0
     top_level_request_url: str | None = None
     has_more: bool | None = None
+    top_level_comments_null: bool = False
     cursor: str | None = None
     last_response_at: float = 0.0
     last_added: int = 0
     warnings: set[str] = field(default_factory=set)
+    load_failures: dict[str, int] = field(default_factory=dict)
+    reply_received: dict[str, int] = field(default_factory=dict)
+    reply_progress: dict[str, tuple[str | None, int, bool]] = field(default_factory=dict)
+    skipped_reply_ids: set[str] = field(default_factory=set)
+
+
+def _record_load_failure(state: ResponseState, config: CrawlerConfig, key: str, reason: str) -> bool:
+    """Consume one failed attempt; preserve budgets across API/DOM fallback."""
+    count = state.load_failures.get(key, 0) + 1
+    state.load_failures[key] = count
+    exhausted = count > config.retry_limit
+    action = "已达上限，跳过失败项／停止当前视频，结果可能不完整" if exhausted else f"准备重试 {count}/{config.retry_limit}"
+    message = f"[失败重试][{key}] {reason}；{action}"
+    print(message)
+    if exhausted:
+        state.warnings.add(message)
+    return exhausted
 
 
 async def _randomized_pause(config: CrawlerConfig, scale: float = 1.0) -> None:
     minimum = max(100, round(config.min_delay_ms * scale))
     maximum = max(minimum, round(config.max_delay_ms * scale))
     await asyncio.sleep(random.randint(minimum, maximum) / 1_000)
+
+
+async def _goto_with_retries(page: Page, config: CrawlerConfig, state: ResponseState) -> None:
+    """Bound initial video navigation failures using the page's retry budget."""
+    for attempt in range(config.retry_limit + 1):
+        if state.top_level_comments_null:
+            return
+        if config.stop_requested is not None and config.stop_requested():
+            raise asyncio.CancelledError
+        try:
+            await page.goto(
+                config.url,
+                wait_until="domcontentloaded",
+                timeout=config.navigation_timeout_ms,
+            )
+            state.load_failures.pop("navigation", None)
+            return
+        except Exception as error:
+            if state.top_level_comments_null:
+                return
+            if config.stop_requested is not None and config.stop_requested():
+                raise asyncio.CancelledError from error
+            exhausted = _record_load_failure(state, config, "navigation", str(error))
+            if exhausted:
+                raise RuntimeError(
+                    f"视频页面加载失败，已用尽 {config.retry_limit} 次重试：{error}"
+                ) from error
+            await _randomized_pause(config)
 
 
 def _initial_result(
@@ -137,6 +189,7 @@ def _initial_result(
             "comment_scope": config.comment_scope,
             "fetch_mode": config.fetch_mode,
             "fetch_douyin_id": config.fetch_douyin_id,
+            "retry_limit": config.retry_limit,
             "idle_rounds": config.idle_rounds,
             "max_comments": config.max_comments or None,
             "max_minutes": config.max_minutes,
@@ -239,12 +292,18 @@ class CommentResponseCollector:
 
     async def _handle(self, response: Response, *, is_reply: bool) -> None:
         try:
-            payload = await response.json()
+            payload = await asyncio.wait_for(response.json(), timeout=10)
         except Exception:
             self.state.warnings.add(f"无法解析评论响应：{response.url}")
             return
 
-        comments = extract_top_level_comment_array(payload)
+        if not isinstance(payload, dict) or getattr(response, "status", 200) >= 400 or payload.get("status_code", 0) not in (0, None):
+            self.state.warnings.add(f"评论接口返回错误：{response.url}")
+            return
+        data = payload.get("data")
+        comments_null = (("comments" in payload and payload["comments"] is None)
+                         or (isinstance(data, dict) and "comments" in data and data["comments"] is None))
+        comments = [] if comments_null else extract_top_level_comment_array(payload)
         if is_reply:
             query = parse_qs(urlparse(response.url).query)
             parent_id = next(
@@ -272,13 +331,26 @@ class CommentResponseCollector:
         else:
             added = sum(self.store.add(comment, self.aweme_id) for comment in comments)
         pagination = extract_pagination(payload)
+        if comments_null:
+            pagination["has_more"] = False
+            print(f"[{'回复' if is_reply else '一级评论'}响应] comments=null，跳过当前{'回复列表' if is_reply else '视频'}，不再重试")
         self.state.response_count += 1
         if is_reply:
             self.state.reply_response_count += 1
+            self.state.reply_received[parent_id] = self.state.reply_received.get(parent_id, 0) + 1
+            previous = self.state.reply_progress.get(parent_id, (None, 0, False))
+            values = self.store.values()
+            expected = next((comment.get("reply_count", 0) for comment in values if comment.get("id") == parent_id), 0)
+            loaded = sum(1 for comment in values if comment.get("root_comment_id") == parent_id)
+            finished = previous[2] or comments_null or (pagination["has_more"] is False and (bool(comments) or loaded >= expected))
+            self.state.reply_progress[parent_id] = (pagination["cursor"] if comments or finished else previous[0], previous[1] + added, finished)
         else:
+            if comments_null:
+                self.state.top_level_comments_null = True
+                self.state.load_failures.pop("top_level", None)
             self.state.top_level_response_count += 1
             self.state.top_level_request_url = response.url
-            self.state.has_more = pagination["has_more"]
+            self.state.has_more = False if self.state.top_level_comments_null else pagination["has_more"]
             self.state.cursor = pagination["cursor"]
         self.state.last_response_at = asyncio.get_running_loop().time()
         self.state.last_added = added
@@ -298,16 +370,21 @@ class CommentResponseCollector:
             await asyncio.gather(*tuple(self.pending), return_exceptions=True)
 
 
-async def _expand_reply_threads(page: Page, config: CrawlerConfig) -> int:
-    if config.comment_scope != "all":
+async def _expand_reply_threads(page: Page, config: CrawlerConfig, state: ResponseState | None = None, collector: CommentResponseCollector | None = None) -> int:
+    """Expand each reply page with an independent bounded, data-based retry budget."""
+    state = state if state is not None else ResponseState()
+    if config.comment_scope != "all" or "__scan_failed__" in state.skipped_reply_ids:
         return 0
     clicked = 0
     for attempt in range(40):
+        if config.stop_requested and config.stop_requested():
+            return clicked
         token = f"codex-expand-{attempt}-{random.randint(100000, 999999)}"
+        result = None
         try:
             result = await page.evaluate(
                 """
-                token => {
+                ({token, blocked}) => {
                   const normalize = value =>
                     (value || "").replace(/\\s+/g, "").trim();
                   const matchesExpandControl = text =>
@@ -360,14 +437,18 @@ async def _expand_reply_threads(page: Page, config: CrawlerConfig) -> int:
                     );
                     if (hasSameTextChild) continue;
                     const target = element.closest('button, [role="button"], a') || element;
-                    if (target.dataset.douyinExpandClickedText === text) continue;
+                    const card = target.closest('[data-e2e="comment-item"]');
+                    const tooltip = card && (card.querySelector('[data-e2e="video-comment-more"][id^="tooltip_"]') || card.querySelector('[id^="tooltip_"]'));
+                    const parentId = tooltip ? tooltip.id.slice(8) : '';
+                    const key = parentId || (card ? normalize(card.innerText).slice(0, 100) : text);
+                    if (blocked.includes(key) || target.dataset.douyinExpandClickedText === text) continue;
                     target.dataset.douyinExpandToken = token;
-                    return {found: true, text, tag: target.tagName.toLowerCase()};
+                    return {found: true, text, key, parentId, replyControl: /回复|评论|条/.test(text), tag: target.tagName.toLowerCase()};
                   }
                   return {found: false, reason: "reply-control-missing"};
                 }
                 """,
-                token,
+                {"token": token, "blocked": list(state.skipped_reply_ids)},
             )
             if not result or not result.get("found"):
                 if clicked == 0:
@@ -379,25 +460,57 @@ async def _expand_reply_threads(page: Page, config: CrawlerConfig) -> int:
             target = page.locator(
                 f'[data-douyin-expand-token="{token}"]'
             ).first
+            key = result["key"]
+            parent_id = result.get("parentId", "")
+            before = state.reply_progress.get(parent_id)
+            if before is not None and before[2]:
+                state.skipped_reply_ids.add(key)
+                continue
+            before_received = state.reply_received.get(parent_id, 0)
             await target.scroll_into_view_if_needed(timeout=4_000)
-            try:
-                await target.click(timeout=4_000)
-            except Exception:
-                await target.evaluate("element => element.click()")
-            clicked += 1
-            try:
-                await target.evaluate(
-                    """
-                    (element, text) => {
-                      element.dataset.douyinExpandClickedText = text;
-                      delete element.dataset.douyinExpandToken;
-                    }
-                    """,
-                    result.get("text", "展开"),
-                )
-            except Exception:
-                # 点击后元素可能立即被 React 替换；这表示点击已经生效。
-                pass
+            await target.click(timeout=4_000)
+            if not result.get("replyControl", True):
+                # Full-text expansion is not a reply page: mark only that DOM
+                # control and never exhaust the parent comment's reply budget.
+                try:
+                    await target.evaluate("(element, text) => {element.dataset.douyinExpandClickedText = text;}", result.get("text", ""))
+                except PlaywrightError:
+                    pass
+                continue
+            # A successful click is not evidence that replies loaded. Wait for
+            # the matching parent response and only accept actual page progress.
+            await _randomized_pause(config)
+            deadline = asyncio.get_running_loop().time() + config.action_timeout_ms / 1000
+            while collector is not None and state.reply_received.get(parent_id, 0) == before_received:
+                if config.stop_requested and config.stop_requested():
+                    return clicked
+                await collector.drain()
+                if asyncio.get_running_loop().time() >= deadline:
+                    break
+                await asyncio.sleep(0.2)
+            if collector is not None:
+                await collector.drain()
+            after = state.reply_progress.get(parent_id)
+            progressed = after is not None and (
+                after[2]
+                or (before is None and (after[1] > 0 or after[0] not in (None, "0")))
+                or (before is not None and (after[1] > before[1] or after[0] != before[0]))
+            )
+            if progressed:
+                state.load_failures.pop("reply:" + key, None)
+                clicked += 1
+                if after[2]:
+                    state.skipped_reply_ids.add(key)
+            else:
+                blocking = await _find_blocking_state(page)
+                if blocking:
+                    await _wait_for_manual_challenge(page, config, blocking)
+                    continue
+                exhausted = _record_load_failure(state, config, "reply:" + key, "展开后未取得关联回复分页进展")
+                if exhausted:
+                    state.skipped_reply_ids.add(key)
+            if config.stop_requested and config.stop_requested():
+                break
             print(
                 f"[回复加载] 已点击“{result.get('text', '展开')}”"
                 f"（本轮第 {clicked} 个）"
@@ -406,8 +519,21 @@ async def _expand_reply_threads(page: Page, config: CrawlerConfig) -> int:
             # 因此提速不会跳过新出现的嵌套“展开”入口。
             await page.wait_for_timeout(random.randint(280, 480))
         except Exception as error:
+            blocking = await _find_blocking_state(page)
+            if blocking:
+                await _wait_for_manual_challenge(page, config, blocking)
+                continue
             print(f"[回复加载] 点击展开入口失败：{error}")
-            break
+            if result and result.get("key"):
+                if _record_load_failure(state, config, "reply:" + result["key"], str(error)):
+                    state.skipped_reply_ids.add(result["key"])
+            elif _record_load_failure(state, config, "reply_scan", str(error)):
+                state.skipped_reply_ids.add("__scan_failed__")
+                break
+            # Keep the viewport until this parent resolves or exhausts its
+            # budget; scrolling would otherwise unmount an unresolved comment.
+            await _randomized_pause(config)
+            continue
     return clicked
 
 
@@ -713,6 +839,8 @@ async def _try_collect_top_level_by_network(
         await page.wait_for_timeout(250)
         await collector.drain()
 
+    if response_state.top_level_comments_null:
+        return "评论接口返回 comments=null，跳过当前视频"
     request_url = response_state.top_level_request_url
     if not request_url or response_state.cursor is None:
         message = "未取得可复用的 comment/list 请求或游标，已自动改用页面滚动"
@@ -760,6 +888,13 @@ async def _try_collect_top_level_by_network(
 
         cursor = response_state.cursor
         if cursor is None or cursor in attempted_cursors:
+            blocking = await _find_blocking_state(page)
+            if blocking:
+                await _wait_for_manual_challenge(page, config, blocking)
+                attempted_cursors.discard(cursor)
+                continue
+            if _record_load_failure(response_state, config, "top_level", "接口游标缺失或重复"):
+                return "评论加载达到失败重试上限，结果可能不完整"
             message = "接口游标缺失或重复，已自动切换页面滚动"
             print(f"[一级评论接口] {message}")
             response_state.warnings.add(message)
@@ -795,6 +930,13 @@ async def _try_collect_top_level_by_network(
             message = f"接口请求失败，已自动切换页面滚动：{error}"
             print(f"[一级评论接口] {message}")
             response_state.warnings.add(message)
+            blocking = await _find_blocking_state(page)
+            if blocking:
+                await _wait_for_manual_challenge(page, config, blocking)
+                attempted_cursors.discard(cursor)
+                continue
+            if _record_load_failure(response_state, config, "top_level", "接口请求失败"):
+                return "评论加载达到失败重试上限，结果可能不完整"
             return None
 
         response_advanced = (
@@ -824,8 +966,16 @@ async def _try_collect_top_level_by_network(
             )
             print(f"[一级评论接口] {message}")
             response_state.warnings.add(message)
+            blocking = await _find_blocking_state(page)
+            if blocking:
+                await _wait_for_manual_challenge(page, config, blocking)
+                attempted_cursors.discard(cursor)
+                continue
+            if _record_load_failure(response_state, config, "top_level", "接口未推进分页"):
+                return "评论加载达到失败重试上限，结果可能不完整"
             return None
 
+        response_state.load_failures.pop("top_level", None)
         direct_pages += 1
         added = len(store) - before_count
         direct_added += max(0, added)
@@ -848,6 +998,37 @@ async def _try_collect_top_level_by_network(
         if config.comment_scope != "all"
         else None
     )
+
+
+async def _comment_scroll_position(page: Page) -> float | None:
+    """Read the active comment viewport, so ordinary traversal is not a failure."""
+    try:
+        return await page.evaluate("""() => {
+          const list = [...document.querySelectorAll('[data-e2e="comment-list"]')].find(e => e.getBoundingClientRect().height > 0);
+          for(let e=list;e && e!==document.body;e=e.parentElement) {
+            if (['auto','scroll','overlay'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight) return e.scrollTop;
+          }
+          return null;
+        }""")
+    except PlaywrightError:
+        return None
+
+
+async def _comment_panel_fits_viewport(page: Page) -> bool:
+    """Recognize a visible short list that legitimately needs no scrollbar."""
+    try:
+        return bool(await page.evaluate("""() => {
+          const list = [...document.querySelectorAll('[data-e2e="comment-list"]')].find(e => e.getBoundingClientRect().height > 0);
+          if (!list) return false;
+          const rect = list.getBoundingClientRect();
+          if (rect.top < 0 || rect.bottom > innerHeight) return false;
+          for(let e=list;e && e!==document.body;e=e.parentElement) {
+            if (['auto','scroll','overlay'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight) return false;
+          }
+          return true;
+        }"""))
+    except PlaywrightError:
+        return False
 
 
 async def _collect_by_scrolling(
@@ -874,6 +1055,8 @@ async def _collect_by_scrolling(
     reply_phase = config.comment_scope != "all"
 
     while loop.time() < deadline:
+        if response_state.top_level_comments_null:
+            return "评论接口返回 comments=null，跳过当前视频"
         round_number += 1
         if config.stop_requested is not None and config.stop_requested():
             return "用户从网页停止任务"
@@ -898,6 +1081,10 @@ async def _collect_by_scrolling(
             and response_state.has_more is False
         ):
             await collector.drain()
+            if len(store) == 0:
+                # A valid empty final response is normal completion, not a
+                # missing-scroll-container failure in the reply scan phase.
+                return "评论接口返回 has_more=false，暂无评论"
             await _reset_comment_panel_to_top(page)
             await _randomized_pause(config)
             reply_phase = True
@@ -909,12 +1096,14 @@ async def _collect_by_scrolling(
 
         expanded_count = 0
         if config.comment_scope == "all" and reply_phase:
-            expanded_count = await _expand_reply_threads(page, config)
+            expanded_count = await _expand_reply_threads(page, config, response_state, collector)
             await collector.drain()
 
         # 所有层级模式先把当前 DOM 中能看到的回复入口处理完。只要本轮有
         # 展开动作就暂不滚动，避免虚拟列表卸载尚未处理的一级评论。
         found_target = True
+        before_top_cursor = response_state.cursor
+        before_scroll_position = await _comment_scroll_position(page)
         if expanded_count == 0:
             found_target = await _scroll_comment_panel(
                 page,
@@ -932,7 +1121,41 @@ async def _collect_by_scrolling(
 
         await _randomized_pause(config)
         await collector.drain()
-        if len(store) > previous_count or expanded_count > 0:
+        if response_state.top_level_comments_null:
+            return "评论接口返回 comments=null，跳过当前视频"
+        after_scroll_position = await _comment_scroll_position(page)
+        viewport_moved = before_scroll_position is not None and after_scroll_position is not None and after_scroll_position != before_scroll_position
+        if not viewport_moved and len(store) <= previous_count and expanded_count == 0:
+            blocking = await _find_blocking_state(page)
+            if blocking:
+                await _wait_for_manual_challenge(page, config, blocking)
+                continue
+        if not found_target and config.comment_scope == "all" and reply_phase:
+            if response_state.has_more is False and await _comment_panel_fits_viewport(page):
+                return "评论接口返回 has_more=false，评论及回复扫描完成"
+            if _record_load_failure(response_state, config, "reply_viewport", "回复扫描无法找到可滚动评论容器"):
+                return "回复扫描达到失败重试上限，结果可能不完整"
+        elif config.comment_scope == "all" and reply_phase:
+            # A usable reply-scanning viewport means earlier scan failures are
+            # no longer consecutive and must not consume this video's budget.
+            response_state.load_failures.pop("reply_viewport", None)
+        if response_state.cursor != before_top_cursor or len(store) > previous_count:
+            response_state.load_failures.pop("top_level", None)
+        elif expanded_count == 0 and not viewport_moved:
+            # The all-level mode has an unbounded runtime by design, so its
+            # initial top-level loading phase also needs the configured retry
+            # budget. Without this branch a missing/ stalled first page could
+            # keep polling forever while waiting for has_more=false.
+            loading_top_level = not (config.comment_scope == "all" and reply_phase)
+            if loading_top_level and response_state.has_more is not False:
+                empty_page = await _page_explicitly_has_no_comments(page)
+                if config.comment_scope == "all" and not reply_phase and empty_page:
+                    return "页面明确显示暂无评论"
+                if not empty_page:
+                    if _record_load_failure(response_state, config, "top_level", "页面加载未推进评论列表"):
+                        return "评论加载达到失败重试上限，结果可能不完整"
+        # Traversing preloaded comments is useful even without network data.
+        if len(store) > previous_count or viewport_moved:
             idle_rounds = 0
             if len(store) > previous_count:
                 previous_count = len(store)
@@ -1210,8 +1433,11 @@ async def _supplement_douyin_ids(
                 pass
 
     async def query_with_recovery(sec_uid: str) -> str:
+        """Retry read-only profile loading without retrying any publish action."""
         nonlocal profile_page
-        for attempt in range(3):
+        for attempt in range(config.retry_limit + 1):
+            if config.stop_requested and config.stop_requested():
+                raise asyncio.CancelledError
             reload = attempt == 1 and profile_page is not None and not profile_page.is_closed()
             try:
                 if profile_page is None or profile_page.is_closed():
@@ -1219,14 +1445,18 @@ async def _supplement_douyin_ids(
                     profile_page.set_default_timeout(config.action_timeout_ms)
                 return await _read_profile_short_id(profile_page, sec_uid, config, reload=reload)
             except (_ProfilePageFailure, PlaywrightError, TimeoutError) as error:
-                if attempt == 2:
+                if attempt >= config.retry_limit:
                     await close_profile_page()
                     raise
                 action = "重新加载主页" if attempt == 0 else "新建主页标签页"
-                print(f"[抖音号][自动恢复] {error}；{action}，重试 {attempt + 1}/2")
-                if attempt == 1:
+                print(f"[抖音号][自动恢复] {error}；{action}，重试 {attempt + 1}/{config.retry_limit}")
+                if attempt >= 1:
                     await close_profile_page()
-                await asyncio.sleep(1 + attempt)
+                deadline = asyncio.get_running_loop().time() + max(0.1, config.min_delay_ms / 1000)
+                while asyncio.get_running_loop().time() < deadline:
+                    if config.stop_requested and config.stop_requested():
+                        raise asyncio.CancelledError
+                    await asyncio.sleep(0.1)
             except _ProfileVerificationFailure:
                 # Login/risk verification remains manual; never refresh repeatedly.
                 raise
@@ -1390,35 +1620,32 @@ async def crawl_douyin_comments(
                 "确认无新增和无展开入口后才结束"
             )
         print(f"打开页面：{config.url}")
-        await page.goto(
-            config.url,
-            wait_until="domcontentloaded",
-            timeout=config.navigation_timeout_ms,
-        )
-        await page.bring_to_front()
-        await _randomized_pause(config, 1.2)
-        initial_state = await _find_blocking_state(page)
-        if (config.require_initial_login or (owned_context and profile_is_new)) and not initial_state:
-            initial_state = "首次使用专用浏览器配置，请先登录抖音"
-        await _wait_for_manual_challenge(
-            page,
-            config,
-            initial_state,
-        )
-        paused = await _pause_configured_video(page, config)
-        if config.pause_xpath.strip() and not paused:
-            response_state.warnings.add("自动暂停视频失败，请检查暂停按钮 XPath")
+        await _goto_with_retries(page, config, response_state)
         await collector.drain()
+        if not response_state.top_level_comments_null:
+            await page.bring_to_front()
+            await _randomized_pause(config, 1.2)
+            await collector.drain()
+            if not response_state.top_level_comments_null:
+                initial_state = await _find_blocking_state(page)
+                if (config.require_initial_login or (owned_context and profile_is_new)) and not initial_state:
+                    initial_state = "首次使用专用浏览器配置，请先登录抖音"
+                await _wait_for_manual_challenge(page, config, initial_state)
+                paused = await _pause_configured_video(page, config)
+                if config.pause_xpath.strip() and not paused:
+                    response_state.warnings.add("自动暂停视频失败，请检查暂停按钮 XPath")
+                await collector.drain()
 
-        # 独立视频页自动显示评论列表，无需点击图标；接口监听已在导航前注册。
-        await metadata_collector.wait(config.action_timeout_ms, config.stop_requested)
-        print(
-            "[视频信息] 发布者："
-            f"{result['video_publisher_nickname'] or '未获取到'}；"
-            f"标题：{result['video_title'] or '未获取到'}"
-        )
-        await _randomized_pause(config)
-        await collector.drain()
+        if not response_state.top_level_comments_null:
+            # 独立视频页自动显示评论列表，无需点击图标；接口监听已在导航前注册。
+            await metadata_collector.wait(config.action_timeout_ms, config.stop_requested)
+            print(
+                "[视频信息] 发布者："
+                f"{result['video_publisher_nickname'] or '未获取到'}；"
+                f"标题：{result['video_title'] or '未获取到'}"
+            )
+            await _randomized_pause(config)
+            await collector.drain()
         _checkpoint(run_directory, result, store, response_state)
 
         network_stop_reason = await _try_collect_top_level_by_network(
@@ -1472,7 +1699,10 @@ async def crawl_douyin_comments(
             config,
         )
 
-        result["status"] = "complete"
+        incomplete = any(count > config.retry_limit for key, count in response_state.load_failures.items() if key == "top_level" or key.startswith("reply"))
+        result["status"] = "incomplete" if incomplete else "complete"
+        if incomplete:
+            result["summary"]["stop_reason"] += "；部分加载达到失败重试上限，结果可能不完整"
         result["finished_at"] = (
             datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         )

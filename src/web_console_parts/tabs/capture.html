@@ -4,8 +4,7 @@
                 <h2>采集配置</h2>
                 <div class="field"><label for="url">抖音视频链接</label>
                     <div id="videoLinks" class="video-links"></div>
-                    <small>请粘贴完整分享文本，不接受单独网址（包括带 modal_id
-                        的链接）。启动前解析全部视频链接，全部通过才采集；空输入框忽略。</small></div>
+                    <small>指定本次要采集的视频，可添加多行批量处理。每行粘贴一个视频的完整分享文本，不接受单独网址；启动前统一解析，全部有效才开始采集，空行忽略。</small></div>
                 <!-- 采集操作常驻设置上方，折叠设置时仍可启动或停止任务。 -->
                 <div class="actions">
                     <button id="start" class="btn primary">启动采集任务</button>
@@ -48,52 +47,53 @@
                         <div class="field"><label for="commentScope">评论层级</label><select id="commentScope">
                             <option value="top_level" selected>仅一级评论（默认）</option>
                             <option value="all">所有层级评论</option>
-                        </select><small>所有层级将运行至完整加载</small></div>
+                        </select><small>决定采集哪些层级的评论。“仅一级评论”采集直接评论视频的内容；“所有层级”还会展开采集评论下的回复，通常耗时更长，且不使用评论数和运行时间上限。加载失败或空返回仍可能提前结束。</small></div>
                         <div class="field"><label for="fetchMode">一级评论加载方式</label><select id="fetchMode">
                             <option value="network_first" selected>接口优先（失败自动滚动）</option>
                             <option value="scroll_only">仅页面滚动</option>
-                        </select><small>接口失败时自动回到页面滚动</small></div>
+                        </select><small>决定如何加载后续一级评论。“接口优先”先尝试接口分页，失败后自动改用页面滚动；“仅页面滚动”通过滚动评论区加载。</small></div>
                     </div>
                     <div class="field"><label for="maxComments">最多评论数</label><input id="maxComments" type="number"
-                                                                                         min="0" value="0"><small>0
-                        表示不限制</small></div>
+                                                                                         min="0" value="0"><small>设置每个视频希望采集的一级评论数量，用于控制采集规模。0 表示不限制，仅在“仅一级评论”模式下生效；实际数量可能因整页返回而超过设置值。</small></div>
                     <div class="field"><label for="fetchDouyinId" class="account-toggle"><input id="fetchDouyinId"
                                                                                                 type="checkbox"
                                                                                                 role="switch"
                                                                                                 aria-describedby="douyinIdHelp"><span
-                            class="account-switch" aria-hidden="true"></span>获取抖音号</label><small id="douyinIdHelp">默认关闭。开启后，评论接口缺失的抖音号会通过用户主页接口补充，同一用户只查询一次；额外访问主页可能影响性能、增加采集耗时。</small>
+                            class="account-switch" aria-hidden="true"></span>获取抖音号</label><small id="douyinIdHelp">决定是否额外补充评论者的抖音号。关闭时只保留评论接口已有的信息；开启后会访问用户主页，补充接口中缺失的抖音号，同一用户去重处理。默认关闭，额外访问会增加采集耗时。</small>
                     </div>
                     <div class="field"><label for="concurrent" class="account-toggle"><input id="concurrent"
                                                                                              type="checkbox"
                                                                                              role="switch"
                                                                                              aria-describedby="concurrentHelp"><span
-                            class="account-switch" aria-hidden="true"></span>并发采集</label><small id="concurrentHelp">默认关闭，按顺序采集。开启后可设置并发数量；数量越大，内存和请求越多，更容易触发验证。遇到验证会暂停启动新任务。</small>
+                            class="account-switch" aria-hidden="true"></span>并发采集</label><small id="concurrentHelp">决定多个视频是依次采集还是同时采集。关闭时按顺序处理；开启后按并发数量同时处理多个视频，可缩短批量任务的等待时间，但会增加内存和请求，更容易触发验证。默认关闭。</small>
                     </div>
                     <div id="concurrencyOptions" class="field" hidden><label
                             for="concurrencyLimit">同时采集的视频数量</label><input id="concurrencyLimit" type="number"
                                                                                     min="1" max="100" step="1"
-                                                                                    value="2"><small>默认 2，可设置
-                        1–100；实际并发不超过待采集的视频数量。</small></div>
+                                                                                    value="2"><small>限制开启并发采集后同时处理的视频数，用于平衡批量处理速度和资源占用。默认 2，范围 1–100；实际并发不超过待采集的视频数。</small></div>
                     <div class="row">
-                        <div class="field"><label for="maxMinutes">最长运行时间</label><input id="maxMinutes"
+                        <div class="field"><label for="maxMinutes">最长运行时间（分钟）</label><input id="maxMinutes"
                                                                                               type="number" min="1"
-                                                                                              value="30"><small>单位：分钟</small>
+                                                                                              value="30">
                         </div>
+                        <div class="field"><label for="retryLimit">失败重试次数</label><input id="retryLimit"
+                            type="number" min="0" max="10" step="1" value="3" required aria-describedby="retryLimitHelp">
+                            <small id="retryLimitHelp">限制加载失败后的重复尝试，避免任务持续请求。默认 3，范围 0–10；首次尝试不计入次数，0 表示不重试。达到上限后跳过失败项，评论列表无法继续加载时停止当前视频并保留已有数据。</small></div>
                         <div class="field"><label for="direction">加载方向</label><select id="direction">
                             <option value="down">向下</option>
                             <option value="up">向上</option>
                         </select></div>
-                        <div class="field"><label for="minDelay">最短滚动等待</label><input id="minDelay" type="number"
+                        <div class="field"><label for="minDelay">最短滚动等待（毫秒）</label><input id="minDelay" type="number"
                                                                                             min="500"
-                                                                                            value="800"><small>单位：毫秒</small>
+                                                                                            value="800">
                         </div>
-                        <div class="field"><label for="maxDelay">最长滚动等待</label><input id="maxDelay" type="number"
+                        <div class="field"><label for="maxDelay">最长滚动等待（毫秒）</label><input id="maxDelay" type="number"
                                                                                             min="500"
-                                                                                            value="1400"><small>单位：毫秒</small>
+                                                                                            value="1400">
                         </div>
-                        <div class="field"><label for="waitMinutes">登录等待时间</label><input id="waitMinutes"
+                        <div class="field"><label for="waitMinutes">登录等待时间（分钟）</label><input id="waitMinutes"
                                                                                                type="number" min="1"
-                                                                                               value="30"><small>单位：分钟</small>
+                                                                                               value="30">
                         </div>
                     </div>
                 </div>
