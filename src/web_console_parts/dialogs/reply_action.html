@@ -1,6 +1,11 @@
 <div id="replyDialog" class="dialog-backdrop" role="presentation" aria-hidden="true">
     <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="replyDialogTitle">
         <h2 id="replyDialogTitle">回复匹配评论</h2>
+        <dl class="reply-context">
+            <div><dt>视频作者</dt><dd id="replyDialogVideoAuthor"></dd></div>
+            <div><dt>视频名称</dt><dd id="replyDialogVideoTitle"></dd></div>
+            <div><dt>匹配条件</dt><dd id="replyDialogMatch"></dd></div>
+        </dl>
         <p id="replyDialogAuthor"></p>
         <p id="replyDialogComment" class="reply-note"></p>
         <div class="field"><label for="replyDraft">回复内容</label><textarea id="replyDraft" rows="4"

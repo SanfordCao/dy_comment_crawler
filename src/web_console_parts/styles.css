@@ -2412,6 +2412,36 @@ select {
     line-height: 1
 }
 
+#replyDialog .dialog {
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto
+}
+
+.reply-context {
+    margin: 16px 0;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--paper)
+}
+
+.reply-context > div {
+    display: grid;
+    grid-template-columns: 5em minmax(0, 1fr);
+    gap: 10px;
+    margin: 4px 0
+}
+
+.reply-context dt {
+    color: var(--muted)
+}
+
+.reply-context dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap
+}
+
 .reply-note {
     margin: 16px 0;
     padding: 12px 14px;

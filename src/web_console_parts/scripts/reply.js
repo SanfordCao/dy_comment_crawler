@@ -695,11 +695,19 @@
             replySubmittedId = '';
             return;
         }
+        // Metadata may arrive while the user is writing; refresh context without resetting the draft.
+        $('replyDialogVideoAuthor').textContent = waiting.video_publisher_nickname || '暂未获取';
+        $('replyDialogVideoTitle').textContent = waiting.video_title || '暂未获取';
+        const matched = [];
+        if (waiting.matched_region) matched.push(`地区：${waiting.matched_region}`);
+        const matchedKeywords = Array.isArray(waiting.matched_keywords) ? waiting.matched_keywords : [];
+        if (matchedKeywords.length) matched.push(`关键词：${matchedKeywords.join('、')}`);
+        $('replyDialogMatch').textContent = matched.join('；') || '匹配信息暂未获取';
         if (waiting.comment_id === replyWaitingId && waiting.job_id === replyWaitingJob) return;
         replyWaitingId = waiting.comment_id;
         replyWaitingJob = waiting.job_id;
         replySubmittedId = '';
-        $('replyDialogAuthor').textContent = `${waiting.comment?.author?.nickname || '匿名用户'} · ${waiting.comment?.ip_label || '属地未知'}`;
+        $('replyDialogAuthor').textContent = `评论作者：${waiting.comment?.author?.nickname || '匿名用户'} · ${waiting.comment?.ip_label || '属地未知'}`;
         $('replyDialogComment').textContent = waiting.comment?.text || '（无文字）';
         $('replyDraft').value = '';
         $('replyDialogError').hidden = true;

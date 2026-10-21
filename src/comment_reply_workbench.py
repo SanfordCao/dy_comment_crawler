@@ -13,7 +13,7 @@ import re
 import time
 
 try:
-    from .comment_reply_filter import REGIONS, matches_reply_filter, validate_reply_filter
+    from .comment_reply_filter import REGIONS, matches_reply_filter, normalize_region, validate_reply_filter
     from .comments import CommentStore, get_aweme_id_from_url
     from .crawler import (
         CommentResponseCollector, ResponseState, _find_blocking_state,
@@ -25,7 +25,7 @@ try:
     from .video_links import parse_share_texts, resolve_share_rows
     from .video_metadata import VideoMetadataCollector, validate_metadata_settings
 except ImportError:
-    from comment_reply_filter import REGIONS, matches_reply_filter, validate_reply_filter
+    from comment_reply_filter import REGIONS, matches_reply_filter, normalize_region, validate_reply_filter
     from comments import CommentStore, get_aweme_id_from_url
     from crawler import (
         CommentResponseCollector, ResponseState, _find_blocking_state,
@@ -220,20 +220,38 @@ class CommentReplyWorkbench:
                 raise RuntimeError("本条回复已提交，不能重复发送")
             self.manual_action = ("skip" if skip else "send", value)
 
+    def _waiting_snapshot_locked(self) -> dict[str, Any] | None:
+        """Add current video context and actual filter hits to one pending comment."""
+        waiting = self.items.get(self.waiting_comment_id)
+        if not waiting:
+            return None
+        comment = waiting["comment"]
+        region = self.settings.get("region", "")
+        terms = self.settings.get("keywords", [])
+        if isinstance(terms, str):
+            terms = [terms]
+        text = str(comment.get("text", "")).casefold()
+        matched_region = region if region and normalize_region(comment.get("ip_label", "")) == normalize_region(region) else ""
+        return {**waiting,
+                "video_publisher_nickname": self.video_metadata.get("video_publisher_nickname", "") or "",
+                "video_title": self.video_metadata.get("video_title", "") or "",
+                "matched_region": matched_region,
+                "matched_keywords": [term for term in terms if term and term.casefold() in text]}
+
     def snapshot(self, offset: int = 0, since: int = 0) -> dict[str, Any]:
         """Return paged matches and the single item waiting for manual input."""
         if offset < 0 or since < 0:
             raise ValueError("无效的队列偏移量")
         with self.lock:
             items = list(self.items.values())
-            waiting = self.items.get(self.waiting_comment_id)
+            waiting = self._waiting_snapshot_locked()
             changes = sorted(
                 (dict(item) for item in items if item.get("revision", 0) > since),
                 key=lambda item: item["revision"],
             )[:200]
             return {"job_id": self.job_id, "status": self.status, "message": self.message,
                     "video_url": self.video_url, "run_name": self.run_directory.name if self.run_directory else "",
-                    "settings": dict(self.settings), "waiting": dict(waiting) if waiting else None,
+                    "settings": dict(self.settings), "waiting": waiting,
                     "offset": offset, "total": len(items),
                     "items": [dict(item) for item in items[offset:offset + 200]],
                     "changes": changes,
@@ -244,10 +262,10 @@ class CommentReplyWorkbench:
     def progress_snapshot(self) -> dict[str, Any]:
         """Expose compact queue state without copying all matched comments each poll."""
         with self.lock:
-            waiting = self.items.get(self.waiting_comment_id)
+            waiting = self._waiting_snapshot_locked()
             return {"status": self.status, "message": self.message,
                     "run_name": self.run_directory.name if self.run_directory else "",
-                    "total": len(self.items), "waiting": dict(waiting) if waiting else None,
+                    "total": len(self.items), "waiting": waiting,
                     "error": self.error, "logs": list(self.logs)}
 
     def _observe(self, comment: dict[str, Any]) -> None:
