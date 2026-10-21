@@ -168,109 +168,183 @@ async def _verify_work_page(page: Page, aweme_id: str) -> None:
         raise RuntimeError("页面作品 ID 与目标不一致，已停止操作，防止操作其他作品")
 
 
+class _CommentPanelNavigationReadError(Exception):
+    """A panel DOM read was interrupted by a same-work navigation."""
+
+
 async def _prepare_comment_panel(page: Page, aweme_id: str, retry_limit: int,
                                  stop_requested: Callable[[], bool] | None,
                                  state: ResponseState,
-                                 wait_access: Callable[[], Awaitable[Any]] | None = None) -> None:
+                                 wait_access: Callable[[], Awaitable[Any]] | None = None,
+                                 on_diagnostic: Callable[[str], None] | None = None,
+                                 readiness_timeout_ms: int = 45_000) -> None:
     """Open note comments with coordinated X shortcuts and bounded retries."""
-    diagnostic = "图文详情尚未就绪"
-    for attempt in range(retry_limit + 1):
-        key_sent = False
-        tick = 0
-        key_waits = 0
-        # A late-ready page still gets a full wait before a possible second toggle.
-        while tick < 30 or (key_sent and key_waits < 30):
-            tick += 1
-            if state.top_level_comments_null:
-                return
-            if stop_requested and stop_requested():
-                raise asyncio.CancelledError
-            if wait_access is not None:
-                access_task = asyncio.create_task(wait_access())
-                try:
-                    while not access_task.done():
-                        if state.top_level_comments_null:
-                            return
-                        if stop_requested and stop_requested():
-                            raise asyncio.CancelledError
-                        await asyncio.wait({access_task}, timeout=0.1)
-                    await access_task
-                finally:
-                    if not access_task.done():
-                        access_task.cancel()
-                    await asyncio.gather(access_task, return_exceptions=True)
-            if state.top_level_comments_null:
-                return
+    async def read_panel(stage: str, script: str, *args: Any) -> Any:
+        try:
+            return await page.evaluate(script, *args)
+        except PlaywrightError as error:
+            if "Execution context was destroyed" not in str(error) or page.is_closed():
+                raise
+            # Only DOM reads interrupted by a navigation can consume this budget.
+            # Identity failures and all key/publish failures remain terminal.
             await _verify_work_page(page, aweme_id)
-            if await page.evaluate("() => !!(" + _VISIBLE_COMMENT_LIST + ")"):
-                return
-            if attempt == 0 and tick <= 5:
-                await page.wait_for_timeout(100)
-                continue
-            if not key_sent:
+            raise _CommentPanelNavigationReadError(stage) from error
+
+    readiness_deadline = asyncio.get_running_loop().time() + readiness_timeout_ms / 1_000
+    last_readiness = ""
+
+    def report_readiness(outcome: str) -> None:
+        nonlocal last_readiness
+        parsed = urlparse(page.url)
+        summary = f"{outcome}，URL={parsed.scheme}://{parsed.hostname}{parsed.path}"
+        if summary == last_readiness:
+            return
+        last_readiness = summary
+        message = f"[评论面板] 初始化检查：{summary}"
+        if on_diagnostic is not None:
+            on_diagnostic(message)
+        else:
+            print(message)
+
+    diagnostic = "图文详情尚未就绪"
+    pending_key_waits: int | None = None
+    for attempt in range(retry_limit + 1):
+        try:
+            key_sent = pending_key_waits is not None
+            tick = 0
+            key_waits = pending_key_waits or 0
+            pending_key_waits = None
+            # A late-ready page still gets a full wait before a possible second toggle.
+            while tick < 30 or (key_sent and key_waits < 30):
+                tick += 1
                 if state.top_level_comments_null:
                     return
                 if stop_requested and stop_requested():
                     raise asyncio.CancelledError
-                async with _comment_panel_key_lock(page.context):
+                if wait_access is not None:
+                    access_started = asyncio.get_running_loop().time()
+                    access_task = asyncio.create_task(wait_access())
+                    try:
+                        while not access_task.done():
+                            if state.top_level_comments_null:
+                                return
+                            if stop_requested and stop_requested():
+                                raise asyncio.CancelledError
+                            await asyncio.wait({access_task}, timeout=0.1)
+                        await access_task
+                    finally:
+                        if not access_task.done():
+                            access_task.cancel()
+                        try:
+                            await asyncio.gather(access_task, return_exceptions=True)
+                        finally:
+                            # Login/captcha waits keep their own longer timeout budget.
+                            readiness_deadline += asyncio.get_running_loop().time() - access_started
+                if state.top_level_comments_null:
+                    return
+                await _verify_work_page(page, aweme_id)
+                if await read_panel("可见评论列表检查", "() => !!(" + _VISIBLE_COMMENT_LIST + ")"):
+                    return
+                if attempt == 0 and tick <= 5:
+                    await page.wait_for_timeout(100)
+                    continue
+                if not key_sent:
                     if state.top_level_comments_null:
                         return
                     if stop_requested and stop_requested():
                         raise asyncio.CancelledError
-                    await _verify_work_page(page, aweme_id)
-                    readiness_script = r"""targetId => {
-                      const host = location.hostname.toLowerCase();
-                      const match = location.pathname.match(/^\/(?:share\/)?(?:video|note)\/(\d+)\/?$/);
-                      const ids = new Set(match ? [match[1]] : []);
-                      const query = new URLSearchParams(location.search);
-                      for (const key of ['aweme_id', 'item_id', 'modal_id']) {
-                        for (const value of query.getAll(key)) {
-                          if (!/^\d+$/.test(value)) return 'wrong-work';
-                          ids.add(value);
-                        }
-                      }
-                      if ((host !== 'douyin.com' && !host.endsWith('.douyin.com')) ||
-                          ids.size !== 1 || !ids.has(targetId)) return 'wrong-work';
-                      if (VISIBLE_LIST) return 'visible';
-                      if (document.readyState === 'loading' || !(NOTE_DETAIL)) return 'not-ready';
-                      BLUR_ACTIVE
-                      return 'ready';
-                    }""".replace("NOTE_DETAIL", _NOTE_DETAIL).replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST)
-                    outcome = await page.evaluate(readiness_script.replace("BLUR_ACTIVE", ""), aweme_id)
-                    if outcome == "ready":
-                        await page.bring_to_front()
+                    async with _comment_panel_key_lock(page.context):
                         if state.top_level_comments_null:
                             return
                         if stop_requested and stop_requested():
                             raise asyncio.CancelledError
                         await _verify_work_page(page, aweme_id)
-                        outcome = await page.evaluate(readiness_script.replace("BLUR_ACTIVE", """
-                          const active = document.activeElement;
-                          if (active && active !== document.body && typeof active.blur === 'function') active.blur();
-                        """), aweme_id)
+                        readiness_script = r"""targetId => {
+                          const host = location.hostname.toLowerCase();
+                          const match = location.pathname.match(/^\/(?:share\/)?(?:video|note)\/(\d+)\/?$/);
+                          const ids = new Set(match ? [match[1]] : []);
+                          const query = new URLSearchParams(location.search);
+                          for (const key of ['aweme_id', 'item_id', 'modal_id']) {
+                            for (const value of query.getAll(key)) {
+                              if (!/^\d+$/.test(value)) return 'wrong-work';
+                              ids.add(value);
+                            }
+                          }
+                          if ((host !== 'douyin.com' && !host.endsWith('.douyin.com')) ||
+                              ids.size !== 1 || !ids.has(targetId)) return 'wrong-work';
+                          if (VISIBLE_LIST) return 'visible';
+                          if (document.readyState === 'loading' || !(NOTE_DETAIL)) {
+                            return 'not-ready:' + document.readyState + ':note=' + !!(NOTE_DETAIL);
+                          }
+                          BLUR_ACTIVE
+                          return 'ready';
+                        }""".replace("NOTE_DETAIL", _NOTE_DETAIL).replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST)
+                        outcome = await read_panel("按键前页面检查", readiness_script.replace("BLUR_ACTIVE", ""), aweme_id)
+                        report_readiness(outcome)
                         if outcome == "ready":
+                            await page.bring_to_front()
                             if state.top_level_comments_null:
                                 return
                             if stop_requested and stop_requested():
                                 raise asyncio.CancelledError
                             await _verify_work_page(page, aweme_id)
-                            await page.keyboard.press("x")
-                            key_sent = True
-                    if outcome == "wrong-work":
-                        raise RuntimeError("页面作品 ID 与目标不一致，已停止操作，防止操作其他作品")
-                    if outcome == "visible":
-                        return
-                    diagnostic = "已按 X，但评论列表仍不可见" if key_sent else "图文详情尚未就绪，未按 X"
-            if key_sent:
-                key_waits += 1
+                            outcome = await read_panel("切换标签页后检查", readiness_script.replace("BLUR_ACTIVE", """
+                              const active = document.activeElement;
+                              if (active && active !== document.body && typeof active.blur === 'function') active.blur();
+                            """), aweme_id)
+                            if outcome == "ready":
+                                if state.top_level_comments_null:
+                                    return
+                                if stop_requested and stop_requested():
+                                    raise asyncio.CancelledError
+                                await _verify_work_page(page, aweme_id)
+                                await page.keyboard.press("x")
+                                key_sent = True
+                        if outcome == "wrong-work":
+                            raise RuntimeError("页面作品 ID 与目标不一致，已停止操作，防止操作其他作品")
+                        if outcome == "visible":
+                            return
+                        diagnostic = "已按 X，但评论列表仍不可见" if key_sent else "图文详情尚未就绪，未按 X"
+                    if outcome.startswith("not-ready"):
+                        # Hydration readiness has one deadline, shared across all retries.
+                        # It is not a failed X attempt and never consumes an action retry.
+                        if asyncio.get_running_loop().time() >= readiness_deadline:
+                            raise RuntimeError(f"评论面板初始化等待超时（{readiness_timeout_ms}ms）：{diagnostic}")
+                        tick -= 1
+                if key_sent:
+                    key_waits += 1
+                await page.wait_for_timeout(100)
+            if state.top_level_comments_null:
+                return
+            if stop_requested and stop_requested():
+                raise asyncio.CancelledError
+            await _verify_work_page(page, aweme_id)
+            if await read_panel("可见评论列表检查", "() => !!(" + _VISIBLE_COMMENT_LIST + ")"):
+                return
+        except _CommentPanelNavigationReadError as error:
+            if state.top_level_comments_null:
+                return
+            if stop_requested and stop_requested():
+                raise asyncio.CancelledError
+            await _verify_work_page(page, aweme_id)
+            if key_sent and key_waits < 30:
+                pending_key_waits = key_waits
+            stage = str(error)
+            # Exclude query parameters and fragments from persistent diagnostics.
+            parsed = urlparse(page.url)
+            safe_url = f"{parsed.scheme}://{parsed.hostname}{parsed.path}"
+            diagnostic = f"{stage}遇到同作品页面跳转，URL={safe_url}"
+            retry_message = (f"准备重试 {attempt + 1}/{retry_limit}" if attempt < retry_limit
+                             else f"已用尽 {retry_limit}/{retry_limit} 次重试")
+            message = f"[评论面板] {diagnostic}；{retry_message}"
+            if on_diagnostic is not None:
+                on_diagnostic(message)
+            else:
+                print(message)
+            if attempt >= retry_limit:
+                raise RuntimeError(f"评论面板导航读取恢复已用尽 {retry_limit} 次重试：{diagnostic}") from error
+            # This delay is outside the foreground/key lock.
             await page.wait_for_timeout(100)
-    if state.top_level_comments_null:
-        return
-    if stop_requested and stop_requested():
-        raise asyncio.CancelledError
-    await _verify_work_page(page, aweme_id)
-    if await page.evaluate("() => !!(" + _VISIBLE_COMMENT_LIST + ")"):
-        return
     raise RuntimeError(f"未找到可见评论列表，已用尽 {retry_limit} 次重试：{diagnostic}")
 
 

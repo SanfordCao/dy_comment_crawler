@@ -38,6 +38,9 @@ except ImportError:
     from video_metadata import VideoMetadataCollector, validate_metadata_settings
 
 
+_INITIAL_COMMENT_RESPONSE_TIMEOUT_SECONDS = 45.0
+_COMMENT_PROGRESS_TIMEOUT_SECONDS = 15.0
+
 DEFAULT_XPATHS = {
     "comment_card_xpath": "//*[@data-e2e='comment-item'][.//*[@id='tooltip_{comment_id}']]",
     "reply_button_xpath": "",
@@ -433,11 +436,20 @@ class CommentReplyWorkbench:
                 lambda: page.goto(self.video_url, wait_until="domcontentloaded", timeout=45_000), "视频页面", page=page,
                 skip_when=lambda: response_state.top_level_comments_null)
             await collector.drain()
+            def log_panel_diagnostic(message: str) -> None:
+                with self.lock:
+                    self._log_locked(message)
+                    self._save_locked()
+
             if not response_state.top_level_comments_null:
                 await _prepare_comment_panel(page, aweme_id, self.settings.get("retry_limit", 3),
                                              self.stop_event.is_set, response_state,
-                                             wait_access=lambda: self._wait_manual_access(page))
-            self._set_status("running", "正在滚动评论区并筛选")
+                                             wait_access=lambda: self._wait_manual_access(page),
+                                             on_diagnostic=log_panel_diagnostic)
+            self._set_status("running", "正在等待评论数据并筛选")
+            progress_wait_started = asyncio.get_running_loop().time()
+            initial_wait_logged = False
+            pagination_wait_logged = False
             while not self.stop_event.is_set():
                 await collector.drain()
                 if response_state.top_level_comments_null:
@@ -446,11 +458,28 @@ class CommentReplyWorkbench:
                 wait_started = asyncio.get_running_loop().time()
                 if await self._wait_manual_access(page):
                     # Manual access waits are not part of the configured processing time.
-                    started += asyncio.get_running_loop().time() - wait_started
+                    manual_elapsed = asyncio.get_running_loop().time() - wait_started
+                    started += manual_elapsed
+                    progress_wait_started += manual_elapsed
                 if asyncio.get_running_loop().time() - started >= self.settings["max_minutes"] * 60:
                     self._set_status("complete", self._completion_message("达到设定运行时长"))
                     break
                 await _verify_work_page(page, aweme_id)
+                if response_state.top_level_response_count == 0 and not len(store):
+                    if not initial_wait_logged:
+                        log_panel_diagnostic("[评论加载] 等待首批顶层评论响应，最长等待 45 秒后计一次加载失败")
+                        initial_wait_logged = True
+                    if asyncio.get_running_loop().time() - progress_wait_started >= _INITIAL_COMMENT_RESPONSE_TIMEOUT_SECONDS:
+                        idle += 1
+                        self._loading_failed("评论列表", idle, "首批顶层评论响应等待超时（响应数=0，评论数=0）")
+                        progress_wait_started = asyncio.get_running_loop().time()
+                    await self._retry_pause()
+                    continue
+                if initial_wait_logged:
+                    log_panel_diagnostic(f"[评论加载] 首批数据已就绪：顶层响应数={response_state.top_level_response_count}，评论数={len(store)}")
+                    initial_wait_logged = False
+                    idle = 0
+                    progress_wait_started = asyncio.get_running_loop().time()
                 previous_cursor = response_state.cursor
                 previous_total = len(store)
                 try:
@@ -466,10 +495,15 @@ class CommentReplyWorkbench:
                 except Exception as error:
                     if self.stop_event.is_set():
                         break
+                    manual_started = asyncio.get_running_loop().time()
                     if await self._wait_manual_access(page):
+                        manual_elapsed = asyncio.get_running_loop().time() - manual_started
+                        started += manual_elapsed
+                        progress_wait_started += manual_elapsed
                         continue
                     idle += 1
                     self._loading_failed("评论列表", idle, str(error))
+                    progress_wait_started = asyncio.get_running_loop().time()
                     await self._retry_pause()
                     continue
                 if get_aweme_id_from_url(page.url) != aweme_id:
@@ -480,14 +514,22 @@ class CommentReplyWorkbench:
                 if (discovered or len(store) > previous_total or response_state.cursor != previous_cursor
                         or scroll.get("after") != scroll.get("before")):
                     idle = 0
+                    progress_wait_started = asyncio.get_running_loop().time()
+                    pagination_wait_logged = False
                 else:
-                    idle += 1
                     if scroll["at_end"] and response_state.top_level_response_count > 0 and response_state.has_more is False:
                         self._set_status("complete", self._completion_message("评论接口已确认加载结束"))
                         break
                     # Already-loaded cards may span several screens without another request.
                     # Only a stationary viewport with no data/cursor progress spends retries.
-                    self._loading_failed("评论列表", idle, "未获取新增评论或有效分页推进")
+                    if not pagination_wait_logged:
+                        log_panel_diagnostic(f"[评论加载] 等待分页推进：顶层响应数={response_state.top_level_response_count}，评论数={len(store)}")
+                        pagination_wait_logged = True
+                    if asyncio.get_running_loop().time() - progress_wait_started >= _COMMENT_PROGRESS_TIMEOUT_SECONDS:
+                        idle += 1
+                        self._loading_failed("评论列表", idle, "等待分页推进超时，未获取新增评论或有效分页推进")
+                        progress_wait_started = asyncio.get_running_loop().time()
+                        pagination_wait_logged = False
                 if asyncio.get_running_loop().time() - last_save >= 3:
                     with self.lock:
                         self._save_locked()
