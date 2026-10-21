@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import random
 import re
+import weakref
 
 from playwright.async_api import (
     BrowserContext,
@@ -147,6 +148,18 @@ _NOTE_DETAIL = r"""(/^\/note\/\d+/.test(location.pathname) ||
   !!document.querySelector('[data-e2e="note-detail"], [data-e2e="note-detail-container"], #note-detail'))"""
 
 
+# Browser contexts belong to one event loop; weak keys avoid retaining closed contexts.
+_COMMENT_PANEL_KEY_LOCKS: weakref.WeakKeyDictionary[BrowserContext, asyncio.Lock] = weakref.WeakKeyDictionary()
+
+
+def _comment_panel_key_lock(context: BrowserContext) -> asyncio.Lock:
+    lock = _COMMENT_PANEL_KEY_LOCKS.get(context)
+    if lock is None:
+        lock = asyncio.Lock()
+        _COMMENT_PANEL_KEY_LOCKS[context] = lock
+    return lock
+
+
 async def _verify_work_page(page: Page, aweme_id: str) -> None:
     parsed = urlparse(page.url)
     host = (parsed.hostname or "").lower()
@@ -159,14 +172,14 @@ async def _prepare_comment_panel(page: Page, aweme_id: str, retry_limit: int,
                                  stop_requested: Callable[[], bool] | None,
                                  state: ResponseState,
                                  wait_access: Callable[[], Awaitable[Any]] | None = None) -> None:
-    """Open note comments with one page-local click per bounded attempt."""
-    diagnostic = "评论入口尚未就绪"
+    """Open note comments with coordinated X shortcuts and bounded retries."""
+    diagnostic = "图文详情尚未就绪"
     for attempt in range(retry_limit + 1):
-        clicked = False
+        key_sent = False
         tick = 0
-        click_waits = 0
-        # A late-ready entry still gets a full wait before a possible second toggle.
-        while tick < 30 or (clicked and click_waits < 30):
+        key_waits = 0
+        # A late-ready page still gets a full wait before a possible second toggle.
+        while tick < 30 or (key_sent and key_waits < 30):
             tick += 1
             if state.top_level_comments_null:
                 return
@@ -194,56 +207,62 @@ async def _prepare_comment_panel(page: Page, aweme_id: str, retry_limit: int,
             if attempt == 0 and tick <= 5:
                 await page.wait_for_timeout(100)
                 continue
-            if not clicked:
+            if not key_sent:
                 if state.top_level_comments_null:
                     return
                 if stop_requested and stop_requested():
                     raise asyncio.CancelledError
-                outcome = await page.evaluate(r"""targetId => {
-                  const sameWork = () => {
-                    const host = location.hostname.toLowerCase();
-                    if (host !== 'douyin.com' && !host.endsWith('.douyin.com')) return false;
-                    const match = location.pathname.match(/^\/(?:share\/)?(?:video|note)\/(\d+)\/?$/);
-                    const ids = new Set(match ? [match[1]] : []);
-                    const query = new URLSearchParams(location.search);
-                    for (const key of ['aweme_id', 'item_id', 'modal_id']) {
-                      for (const value of query.getAll(key)) {
-                        if (!/^\d+$/.test(value)) return false;
-                        ids.add(value);
+                async with _comment_panel_key_lock(page.context):
+                    if state.top_level_comments_null:
+                        return
+                    if stop_requested and stop_requested():
+                        raise asyncio.CancelledError
+                    await _verify_work_page(page, aweme_id)
+                    readiness_script = r"""targetId => {
+                      const host = location.hostname.toLowerCase();
+                      const match = location.pathname.match(/^\/(?:share\/)?(?:video|note)\/(\d+)\/?$/);
+                      const ids = new Set(match ? [match[1]] : []);
+                      const query = new URLSearchParams(location.search);
+                      for (const key of ['aweme_id', 'item_id', 'modal_id']) {
+                        for (const value of query.getAll(key)) {
+                          if (!/^\d+$/.test(value)) return 'wrong-work';
+                          ids.add(value);
+                        }
                       }
-                    }
-                    return ids.size === 1 && ids.has(targetId);
-                  };
-                  if (!sameWork()) return 'wrong-work';
-                  if (VISIBLE_LIST) return 'visible';
-                  if (document.readyState === 'loading' || !(NOTE_DETAIL)) return 'not-ready';
-                  const visible = e => {
-                    const r = e.getBoundingClientRect(), s = getComputedStyle(e);
-                    return r.width > 0 && r.height > 0 && s.display !== 'none' &&
-                      s.visibility !== 'hidden' && s.visibility !== 'collapse' &&
-                      e.checkVisibility?.({checkOpacity:true, checkVisibilityCSS:true}) !== false;
-                  };
-                  const entries = [...document.querySelectorAll('[data-e2e="feed-comment-icon"]')].filter(visible);
-                  if (!entries.length) return 'missing';
-                  if (entries.length !== 1) return 'ambiguous';
-                  if (!sameWork()) return 'wrong-work';
-                  if (VISIBLE_LIST) return 'visible';
-                  entries[0].click();
-                  return 'clicked';
-                }""".replace("NOTE_DETAIL", _NOTE_DETAIL).replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST), aweme_id)
-                if outcome == "wrong-work":
-                    raise RuntimeError("页面作品 ID 与目标不一致，已停止操作，防止操作其他作品")
-                if outcome == "visible":
-                    return
-                clicked = outcome == "clicked"
-                diagnostic = {
-                    "not-ready": "图文详情或评论入口尚未就绪",
-                    "missing": "未找到可见评论入口",
-                    "ambiguous": "可见评论入口不唯一，未点击",
-                    "clicked": "已点击评论入口，但评论列表仍不可见",
-                }.get(outcome, "评论入口状态未知")
-            if clicked:
-                click_waits += 1
+                      if ((host !== 'douyin.com' && !host.endsWith('.douyin.com')) ||
+                          ids.size !== 1 || !ids.has(targetId)) return 'wrong-work';
+                      if (VISIBLE_LIST) return 'visible';
+                      if (document.readyState === 'loading' || !(NOTE_DETAIL)) return 'not-ready';
+                      BLUR_ACTIVE
+                      return 'ready';
+                    }""".replace("NOTE_DETAIL", _NOTE_DETAIL).replace("VISIBLE_LIST", _VISIBLE_COMMENT_LIST)
+                    outcome = await page.evaluate(readiness_script.replace("BLUR_ACTIVE", ""), aweme_id)
+                    if outcome == "ready":
+                        await page.bring_to_front()
+                        if state.top_level_comments_null:
+                            return
+                        if stop_requested and stop_requested():
+                            raise asyncio.CancelledError
+                        await _verify_work_page(page, aweme_id)
+                        outcome = await page.evaluate(readiness_script.replace("BLUR_ACTIVE", """
+                          const active = document.activeElement;
+                          if (active && active !== document.body && typeof active.blur === 'function') active.blur();
+                        """), aweme_id)
+                        if outcome == "ready":
+                            if state.top_level_comments_null:
+                                return
+                            if stop_requested and stop_requested():
+                                raise asyncio.CancelledError
+                            await _verify_work_page(page, aweme_id)
+                            await page.keyboard.press("x")
+                            key_sent = True
+                    if outcome == "wrong-work":
+                        raise RuntimeError("页面作品 ID 与目标不一致，已停止操作，防止操作其他作品")
+                    if outcome == "visible":
+                        return
+                    diagnostic = "已按 X，但评论列表仍不可见" if key_sent else "图文详情尚未就绪，未按 X"
+            if key_sent:
+                key_waits += 1
             await page.wait_for_timeout(100)
     if state.top_level_comments_null:
         return
@@ -1477,7 +1496,8 @@ async def _read_profile_short_id(
             blocker = await _find_blocking_state(page)
             if blocker:
                 print("[抖音号] 用户主页需要登录或验证，等待人工处理")
-                await page.bring_to_front()
+                async with _comment_panel_key_lock(page.context):
+                    await page.bring_to_front()
                 try:
                     await _wait_for_manual_challenge(page, config, blocker)
                 except Exception as error:
@@ -1546,7 +1566,8 @@ async def _supplement_douyin_ids(
             reload = attempt == 1 and profile_page is not None and not profile_page.is_closed()
             try:
                 if profile_page is None or profile_page.is_closed():
-                    profile_page = await asyncio.wait_for(context.new_page(), timeout=15)
+                    async with _comment_panel_key_lock(context):
+                        profile_page = await asyncio.wait_for(context.new_page(), timeout=15)
                     profile_page.set_default_timeout(config.action_timeout_ms)
                 return await _read_profile_short_id(profile_page, sec_uid, config, reload=reload)
             except (_ProfilePageFailure, PlaywrightError, TimeoutError) as error:
@@ -1666,7 +1687,8 @@ async def crawl_douyin_comments(
             playwright_instance = await async_playwright().start()
         if config.browser_context is not None:
             context = config.browser_context
-            page = await context.new_page()
+            async with _comment_panel_key_lock(context):
+                page = await context.new_page()
         elif config.cdp_url:
             print(f"连接现有 Chrome：{config.cdp_url}")
             browser = await playwright_instance.chromium.connect_over_cdp(
@@ -1676,7 +1698,8 @@ async def crawl_douyin_comments(
             if not browser.contexts:
                 raise RuntimeError("Chrome 中没有可用的浏览器上下文")
             context = browser.contexts[0]
-            page = await context.new_page()
+            async with _comment_panel_key_lock(context):
+                page = await context.new_page()
         else:
             profile_is_new = not config.profile_dir.exists() or not any(
                 config.profile_dir.iterdir()
@@ -1694,7 +1717,8 @@ async def crawl_douyin_comments(
             if context.pages and context.pages[0].url == "about:blank":
                 page = context.pages[0]
             else:
-                page = await context.new_page()
+                async with _comment_panel_key_lock(context):
+                    page = await context.new_page()
 
         page.set_default_timeout(config.action_timeout_ms)
         collector = CommentResponseCollector(
@@ -1729,7 +1753,8 @@ async def crawl_douyin_comments(
         await _goto_with_retries(page, config, response_state)
         await collector.drain()
         if not response_state.top_level_comments_null:
-            await page.bring_to_front()
+            async with _comment_panel_key_lock(page.context):
+                await page.bring_to_front()
             await _randomized_pause(config, 1.2)
             await collector.drain()
             if not response_state.top_level_comments_null:

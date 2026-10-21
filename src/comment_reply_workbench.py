@@ -18,6 +18,7 @@ try:
     from .crawler import (
         CommentResponseCollector, ResponseState, _find_blocking_state,
         _prepare_comment_panel, _verify_work_page, _VISIBLE_COMMENT_LIST, _NOTE_DETAIL,
+        _comment_panel_key_lock,
     )
     from .output import create_run_directory
     from .reply_presets import validate_reply_concurrency, validate_retry_limit
@@ -29,6 +30,7 @@ except ImportError:
     from crawler import (
         CommentResponseCollector, ResponseState, _find_blocking_state,
         _prepare_comment_panel, _verify_work_page, _VISIBLE_COMMENT_LIST, _NOTE_DETAIL,
+        _comment_panel_key_lock,
     )
     from output import create_run_directory
     from reply_presets import validate_reply_concurrency, validate_retry_limit
@@ -413,7 +415,8 @@ class CommentReplyWorkbench:
         """Scroll the independent video page, match API comments, then reply via XPath."""
         metadata_settings = self._metadata_settings()
         context = await self.browser_session.get_context()
-        page = await context.new_page()
+        async with _comment_panel_key_lock(context):
+            page = await context.new_page()
         aweme_id = get_aweme_id_from_url(self.video_url)
         store = CommentStore(on_added=self._observe)
         response_state = ResponseState()
