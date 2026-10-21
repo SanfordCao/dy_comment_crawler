@@ -64,6 +64,21 @@ class _ReplyVideoMetadataCollector(VideoMetadataCollector):
         self.on_update(dict(self.result))
 
 
+def _verified_reply_display_url(raw_url: str, aweme_id: str) -> str:
+    """Keep only the route type of an official same-work main-frame URL."""
+    try:
+        parsed = urlparse(raw_url)
+        host = (parsed.hostname or "").lower()
+        match = re.fullmatch(r"/(video|note)/(\d+)/?", parsed.path)
+        if (parsed.scheme not in {"http", "https"} or
+                not (host == "douyin.com" or host.endswith(".douyin.com")) or
+                not match or get_aweme_id_from_url(raw_url) != aweme_id):
+            return ""
+        return f"https://www.douyin.com/{match.group(1)}/{aweme_id}"
+    except ValueError:
+        return ""
+
+
 class CommentReplyWorkbench:
     """Run one video in its own tab and save only comments matching its filters."""
 
@@ -82,6 +97,7 @@ class CommentReplyWorkbench:
         self.job_id = ""
         self.run_directory: Path | None = None
         self.video_url = ""
+        self.display_url = ""
         self.video_metadata: dict[str, str] = {}
         self.settings: dict[str, Any] = {}
         self.xpaths = dict(DEFAULT_XPATHS)
@@ -182,6 +198,7 @@ class CommentReplyWorkbench:
             self.error = ""
             self.job_id = job_id or datetime.now().strftime("%Y%m%d-%H%M%S-%f")
             self.video_url = video_url
+            self.display_url = _verified_reply_display_url(video_url, aweme_id)
             self.video_metadata = {}
             self.settings = {**settings, "retry_limit": validate_retry_limit(settings)}
             self.items = {}
@@ -250,7 +267,7 @@ class CommentReplyWorkbench:
                 key=lambda item: item["revision"],
             )[:200]
             return {"job_id": self.job_id, "status": self.status, "message": self.message,
-                    "video_url": self.video_url, "run_name": self.run_directory.name if self.run_directory else "",
+                    "video_url": self.video_url, "display_url": self.display_url, "run_name": self.run_directory.name if self.run_directory else "",
                     "settings": dict(self.settings), "waiting": waiting,
                     "offset": offset, "total": len(items),
                     "items": [dict(item) for item in items[offset:offset + 200]],
@@ -264,6 +281,7 @@ class CommentReplyWorkbench:
         with self.lock:
             waiting = self._waiting_snapshot_locked()
             return {"status": self.status, "message": self.message,
+                    "display_url": self.display_url,
                     "run_name": self.run_directory.name if self.run_directory else "",
                     "total": len(self.items), "waiting": waiting,
                     "error": self.error, "logs": list(self.logs)}
@@ -439,6 +457,15 @@ class CommentReplyWorkbench:
         async with _comment_panel_key_lock(context):
             page = await context.new_page()
         aweme_id = get_aweme_id_from_url(self.video_url)
+
+        def update_display_url(frame: Any) -> None:
+            if frame != page.main_frame:
+                return
+            display_url = _verified_reply_display_url(frame.url, aweme_id)
+            if display_url:
+                with self.lock:
+                    self.display_url = display_url
+
         store = CommentStore(on_added=self._observe)
         response_state = ResponseState()
         collector = CommentResponseCollector(page, store, response_state, aweme_id)
@@ -449,6 +476,7 @@ class CommentReplyWorkbench:
         metadata_collector = _ReplyVideoMetadataCollector(
             page, aweme_id, metadata_settings, {}, set(), on_update=self._save_video_metadata)
         try:
+            page.on("framenavigated", update_display_url)
             metadata_collector.attach()
             await self._retry_read(
                 lambda: page.goto(self.video_url, wait_until="domcontentloaded", timeout=45_000), "视频页面", page=page,
@@ -570,6 +598,10 @@ class CommentReplyWorkbench:
                 self._save_locked()
         finally:
             # 清理阶段任何失败都只写日志：任务状态已由正常流程确定，不能被覆盖。
+            try:
+                page.remove_listener("framenavigated", update_display_url)
+            except Exception as error:
+                self._log_cleanup_warning("停止页面地址监听", error)
             try:
                 collector.detach()
                 await collector.drain()
@@ -967,7 +999,7 @@ class CommentReplyCoordinator:
             state = job.progress_snapshot() if job is not None else {}
             task = {"job_id": item["job_id"], "status": state.get("status", item["status"]),
                     "message": state.get("message", item["message"]),
-                    "video_url": item["row"]["resolved_url"],
+                    "video_url": state.get("display_url") or item["row"]["resolved_url"],
                     "share_text": item["settings"]["share_text"],
                     "mode": item["settings"]["mode"],
                     "reply_text": item["settings"]["reply_text"],
